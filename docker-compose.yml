@@ -1,0 +1,25 @@
+services:
+  pgsql:
+    image: postgres:16-alpine
+    container_name: quant-pgsql
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: custom_client
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: 111111
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./docker/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d custom_client"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 25s
+
+volumes:
+  pg_data:

@@ -1,0 +1,11 @@
+[br_db.connections.pgsql]
+mode = "Pgsql"
+hostname = "127.0.0.1"
+hostport = "5432"
+database = "custom_client"
+username = "root"
+userpass = "111111"
+params = []
+charset = "Utf8mb4"
+prefix = ""
+debug = false

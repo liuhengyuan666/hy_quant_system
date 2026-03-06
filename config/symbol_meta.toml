@@ -1,0 +1,23 @@
+[symbol_meta]
+"000001" = { name = "上证指数", display_symbol = "1A0001" }
+"000300" = { name = "沪深300", display_symbol = "1A0300" }
+"000905" = { name = "中证500", display_symbol = "1A0905" }
+"399006" = { name = "创业板指", display_symbol = "1A39006" }
+"399673" = { name = "创业板50", display_symbol = "1A39673" }
+"000698" = { name = "科创100", display_symbol = "1A0698" }
+"000688" = { name = "科创50", display_symbol = "1A0688" }
+"000016" = { name = "上证50", display_symbol = "1A0016" }
+"000852" = { name = "中证1000", display_symbol = "1A0852" }
+"HSCEI" = { name = "恒生国企指数", display_symbol = "HK_HSCEI" }
+"HSTECH" = { name = "恒生科技指数", display_symbol = "HK_HSTECH" }
+"HSAHP" = { name = "AH股溢价指数", display_symbol = "HK_HSAHP" }
+"510300" = { name = "沪深300ETF", display_symbol = "E510300" }
+"159915" = { name = "创业板ETF", display_symbol = "E159915" }
+"513130" = { name = "恒生科技ETF", display_symbol = "E513130" }
+"512800" = { name = "银行ETF", display_symbol = "E512800" }
+"512000" = { name = "券商ETF", display_symbol = "E512000" }
+"512400" = { name = "有色ETF", display_symbol = "E512400" }
+"515880" = { name = "通信ETF", display_symbol = "E515880" }
+"159611" = { name = "电力ETF", display_symbol = "E159611" }
+"515070" = { name = "人工智能ETF", display_symbol = "E515070" }
+"159851" = { name = "金融科技ETF", display_symbol = "E159851" }

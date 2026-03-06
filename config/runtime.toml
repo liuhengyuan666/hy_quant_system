@@ -1,0 +1,12 @@
+[runtime]
+timezone = "Asia/Shanghai"
+
+[runtime.intraday]
+enabled = true
+interval_minutes = 5
+bar_frequency = "5"
+lookback_bars = 120
+window_am_start = "09:30"
+window_am_end = "11:30"
+window_pm_start = "13:00"
+window_pm_end = "15:00"
