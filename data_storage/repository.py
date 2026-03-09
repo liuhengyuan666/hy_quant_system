@@ -14,14 +14,17 @@ from data_storage.models import MarketPrice, SignalRecord, TechnicalIndicator
 def _to_date(value: object) -> date:
     if isinstance(value, date):
         return value
-    converted = pd.to_datetime(value, errors="coerce")
+    try:
+        converted = pd.Timestamp(str(value))
+    except Exception:
+        converted = pd.NaT
     if pd.isna(converted):
         raise ValueError(f"invalid date value: {value}")
     return converted.date()
 
 
 def _to_float(value: object, default: float = 0.0) -> float:
-    converted = pd.to_numeric(value, errors="coerce")
+    converted = pd.to_numeric([value], errors="coerce")[0]
     if pd.isna(converted):
         return default
     return float(converted)
@@ -176,6 +179,23 @@ def load_latest_market_date(session: Session, symbols: Sequence[str] | None = No
 
 def load_latest_signal_date(session: Session, mode: str | None = None, bar_frequency: str | None = None) -> date | None:
     stmt = select(func.max(SignalRecord.date))
+    if mode is not None:
+        stmt = stmt.where(SignalRecord.mode == mode)
+    if bar_frequency is not None:
+        stmt = stmt.where(SignalRecord.bar_frequency == bar_frequency.upper())
+    value = session.execute(stmt).scalar_one_or_none()
+    if value is None:
+        return None
+    return _to_date(value)
+
+
+def load_latest_signal_date_on_or_before(
+    session: Session,
+    reference_date: date,
+    mode: str | None = None,
+    bar_frequency: str | None = None,
+) -> date | None:
+    stmt = select(func.max(SignalRecord.date)).where(SignalRecord.date <= _to_date(reference_date))
     if mode is not None:
         stmt = stmt.where(SignalRecord.mode == mode)
     if bar_frequency is not None:

@@ -9,7 +9,7 @@ from config.settings import PostgresConfig, load_symbol_meta_map
 from core.trading_calendar import latest_closed_trading_date
 from data_storage.database import session_scope
 from data_storage.realtime_repository import load_intraday_signals, load_latest_intraday_signal_ts
-from data_storage.repository import load_latest_signal_date, load_market_prices_map, load_signals_by_date
+from data_storage.repository import load_latest_signal_date, load_latest_signal_date_on_or_before, load_market_prices_map, load_signals_by_date
 from signal_service.secondary_validation import build_secondary_validation
 from signal_service.symbol_meta import enrich_signal_frame_with_symbol_names
 
@@ -292,9 +292,13 @@ def build_push_candidates(current_summary: pd.DataFrame, previous_summary: pd.Da
         return _build_empty_push_candidates()
 
     table = current_summary.copy()
+    if "symbol" in table.columns:
+        table["symbol"] = table["symbol"].astype(str)
     previous = previous_summary.copy() if previous_summary is not None and not previous_summary.empty else pd.DataFrame(columns=["symbol"])
 
     if not previous.empty:
+        if "symbol" in previous.columns:
+            previous["symbol"] = previous["symbol"].astype(str)
         previous = previous.rename(
             columns={
                 "dashboard_action": "previous_dashboard_action",
@@ -426,7 +430,7 @@ def _load_previous_summary(output_path: Path) -> pd.DataFrame:
     if not previous:
         return pd.DataFrame()
     latest = previous[-1]
-    return pd.read_csv(latest)
+    return pd.read_csv(latest, dtype={"symbol": "string"})
 
 
 def build_signal_summary(
@@ -529,13 +533,22 @@ def export_signal_summary(
     folder.mkdir(parents=True, exist_ok=True)
 
     with session_scope(config) as session:
-        target_date = signal_date or load_latest_signal_date(session, mode="eod", bar_frequency="D") or latest_closed_trading_date()
+        reference_date = signal_date or latest_closed_trading_date()
+        target_date = load_latest_signal_date_on_or_before(session, reference_date, mode="eod", bar_frequency="D") or reference_date
+        target_date_w = load_latest_signal_date_on_or_before(session, target_date, mode="eod", bar_frequency="W")
+        target_date_m = load_latest_signal_date_on_or_before(session, target_date, mode="eod", bar_frequency="M")
         target_ts = intraday_ts or load_latest_intraday_signal_ts(session, bar_frequency=intraday_bar_frequency)
         eod_d = load_signals_by_date(session, target_date, mode="eod", bar_frequency="D")
-        eod_w = load_signals_by_date(session, target_date, mode="eod", bar_frequency="W")
-        eod_m = load_signals_by_date(session, target_date, mode="eod", bar_frequency="M")
+        eod_w = load_signals_by_date(session, target_date_w, mode="eod", bar_frequency="W") if target_date_w is not None else pd.DataFrame()
+        eod_m = load_signals_by_date(session, target_date_m, mode="eod", bar_frequency="M") if target_date_m is not None else pd.DataFrame()
         intraday = load_intraday_signals(session, target_ts, bar_frequency=intraday_bar_frequency) if target_ts is not None else pd.DataFrame()
-        symbols = sorted(eod_d["symbol"].astype(str).unique().tolist()) if not eod_d.empty else []
+        symbols = sorted(
+            {
+                *eod_d.get("symbol", pd.Series(dtype="string")).astype(str).tolist(),
+                *eod_w.get("symbol", pd.Series(dtype="string")).astype(str).tolist(),
+                *eod_m.get("symbol", pd.Series(dtype="string")).astype(str).tolist(),
+            }
+        )
         market_data_by_symbol = load_market_prices_map(session, symbols, limit=240, as_of_date=target_date) if symbols else {}
 
     secondary_validation = build_secondary_validation(eod_d, market_data_by_symbol=market_data_by_symbol, signal_date=target_date)

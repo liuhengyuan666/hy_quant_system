@@ -180,3 +180,21 @@ class SignalSummaryTests(unittest.TestCase):
         self.assertEqual(int(pushed.iloc[0]["push_rank"]), 1)
         self.assertEqual(pushed.iloc[0]["symbol"], "A")
         self.assertTrue(all(symbol in {"A", "B", "C", "D"} for symbol in pushed["symbol"].tolist()))
+
+    def test_build_push_candidates_coerces_previous_symbol_types(self):
+        current = pd.DataFrame(
+            [
+                {"conviction_rank": 1, "symbol": "510300", "display_symbol": "E510300", "name": "沪深300ETF", "bucket": "宽基ETF", "dashboard_action": "PRIORITY_BUY", "composite_score": 8.0, "secondary_action": "BUY_CONFIRM", "secondary_confidence": 90.0, "review_gate": "CONFIRM"}
+            ]
+        )
+        previous = pd.DataFrame(
+            [
+                {"symbol": 510300, "dashboard_action": "TREND_BUY", "composite_score": 5.0, "conviction_rank": 3, "review_gate": "CAUTION", "secondary_action": "HOLD_OBSERVE"}
+            ]
+        )
+
+        pushed = build_push_candidates(current, previous_summary=previous, limit=3)
+
+        self.assertEqual(len(pushed.index), 1)
+        self.assertEqual(pushed.iloc[0]["symbol"], "510300")
+        self.assertEqual(pushed.iloc[0]["previous_dashboard_action"], "TREND_BUY")
