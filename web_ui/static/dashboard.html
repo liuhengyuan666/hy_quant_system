@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quant System Dashboard｜量化看板</title>
+  <style>
+    :root {
+      --bg: #08111f;
+      --panel: rgba(9, 20, 37, 0.84);
+      --panel-strong: rgba(15, 30, 54, 0.96);
+      --line: rgba(149, 192, 255, 0.2);
+      --text: #eef5ff;
+      --muted: #93a8c8;
+      --buy: #34d399;
+      --sell: #fb7185;
+      --hold: #fbbf24;
+      --accent: #7dd3fc;
+      --glow: rgba(125, 211, 252, 0.2);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(52, 211, 153, 0.08), transparent 24%),
+        radial-gradient(circle at top right, rgba(125, 211, 252, 0.12), transparent 28%),
+        linear-gradient(160deg, #050b14 0%, #08111f 46%, #0c1628 100%);
+      font-family: "Noto Serif SC", "Source Han Serif SC", "PingFang SC", serif;
+    }
+
+    .shell {
+      width: min(1440px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 24px 0 40px;
+    }
+
+    .hero,
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+      backdrop-filter: blur(18px);
+    }
+
+    .hero {
+      padding: 24px;
+      display: grid;
+      gap: 20px;
+    }
+
+    .hero-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(2rem, 5vw, 3.2rem);
+      line-height: 0.95;
+      letter-spacing: 0.03em;
+    }
+
+    .subline,
+    .status-note,
+    .small {
+      color: var(--muted);
+    }
+
+    .controls {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      font: inherit;
+      color: #04111f;
+      background: linear-gradient(135deg, #7dd3fc, #34d399);
+      cursor: pointer;
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.12), 0 10px 24px var(--glow);
+    }
+
+    button[disabled] {
+      cursor: wait;
+      opacity: 0.7;
+    }
+
+    label.toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.03);
+    }
+
+    .grid-cards,
+    .grid-panels {
+      display: grid;
+      gap: 16px;
+      margin-top: 20px;
+    }
+
+    .grid-cards {
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+
+    .grid-panels {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .card,
+    .panel {
+      padding: 18px;
+    }
+
+    .card {
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+    }
+
+    .metric {
+      display: block;
+      margin-top: 8px;
+      font-size: 2rem;
+      font-weight: 700;
+    }
+
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 1.15rem;
+      letter-spacing: 0.04em;
+    }
+
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      margin-bottom: 10px;
+    }
+
+    .quote-split {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .quote-board {
+      display: grid;
+      gap: 10px;
+    }
+
+    .quote-board h3 {
+      margin: 0;
+      font-size: 0.95rem;
+      color: var(--muted);
+      letter-spacing: 0.03em;
+    }
+
+    .quote-board-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: baseline;
+    }
+
+    .quote-note {
+      margin-top: 12px;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border-radius: 14px;
+      border: 1px solid rgba(149, 192, 255, 0.12);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.92rem;
+      min-width: 540px;
+    }
+
+    th,
+    td {
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid rgba(149, 192, 255, 0.08);
+      white-space: nowrap;
+    }
+
+    thead {
+      background: rgba(125, 211, 252, 0.08);
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 72px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      letter-spacing: 0.04em;
+      border: 1px solid transparent;
+    }
+
+    .buy { background: rgba(52, 211, 153, 0.12); color: var(--buy); border-color: rgba(52, 211, 153, 0.32); }
+    .sell { background: rgba(251, 113, 133, 0.12); color: var(--sell); border-color: rgba(251, 113, 133, 0.32); }
+    .hold { background: rgba(251, 191, 36, 0.14); color: var(--hold); border-color: rgba(251, 191, 36, 0.3); }
+    .neutral { background: rgba(255,255,255,0.08); color: var(--text); border-color: rgba(255,255,255,0.12); }
+    .up { background: rgba(251, 113, 133, 0.12); color: var(--sell); border-color: rgba(251, 113, 133, 0.32); }
+    .down { background: rgba(52, 211, 153, 0.12); color: var(--buy); border-color: rgba(52, 211, 153, 0.32); }
+    .flat { background: rgba(255,255,255,0.08); color: var(--text); border-color: rgba(255,255,255,0.12); }
+
+    .banner {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(149, 192, 255, 0.16);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    @media (max-width: 1280px) {
+      .grid-panels {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 980px) {
+      .grid-panels {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .quote-split {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <div class="hero-top">
+        <div>
+          <div class="subline">REALTIME QUANT MONITOR｜实时量化监控</div>
+          <h1>盘中监控仪表盘</h1>
+          <div id="generatedAt" class="status-note">正在读取最新快照…</div>
+        </div>
+        <div class="controls">
+          <button id="refreshButton" type="button">立即刷新盘中数据</button>
+          <label class="toggle"><input id="autoRefresh" type="checkbox" checked /> 自动轮询 15s</label>
+        </div>
+      </div>
+      <div id="providerStatus" class="banner small">数据源状态 / Data source status 加载中…</div>
+      <div class="grid-cards" id="metricCards"></div>
+    </section>
+
+    <section class="grid-panels">
+      <article class="panel">
+        <div class="panel-head"><h2>Index Pool｜指数池行情</h2><span id="indexQuoteCount" class="small"></span></div>
+        <div class="quote-split">
+          <section class="quote-board">
+            <div class="quote-board-head"><h3>Top Gainers｜涨幅榜</h3><span id="indexGainersCount" class="small"></span></div>
+            <div class="table-wrap" id="indexQuoteGainersTable"></div>
+          </section>
+          <section class="quote-board">
+            <div class="quote-board-head"><h3>Top Losers｜跌幅榜</h3><span id="indexLosersCount" class="small"></span></div>
+            <div class="table-wrap" id="indexQuoteLosersTable"></div>
+          </section>
+        </div>
+        <div id="indexQuoteFlatNote" class="small quote-note"></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h2>ETF Pool｜ETF 行情</h2><span id="etfQuoteCount" class="small"></span></div>
+        <div class="quote-split">
+          <section class="quote-board">
+            <div class="quote-board-head"><h3>Top Gainers｜涨幅榜</h3><span id="etfGainersCount" class="small"></span></div>
+            <div class="table-wrap" id="etfQuoteGainersTable"></div>
+          </section>
+          <section class="quote-board">
+            <div class="quote-board-head"><h3>Top Losers｜跌幅榜</h3><span id="etfLosersCount" class="small"></span></div>
+            <div class="table-wrap" id="etfQuoteLosersTable"></div>
+          </section>
+        </div>
+        <div id="etfQuoteFlatNote" class="small quote-note"></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h2>Action Focus｜重点动作</h2><span id="actionFocusCount" class="small"></span></div>
+        <div class="table-wrap" id="actionFocusTable"></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h2>Push Candidates｜变化推送</h2><span id="pushCount" class="small"></span></div>
+        <div class="table-wrap" id="pushTable"></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h2>Latest Intraday Signals｜最新盘中信号</h2><span id="intradayCount" class="small"></span></div>
+        <div class="table-wrap" id="intradayTable"></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h2>Latest Summary｜最新汇总</h2><span id="summaryCount" class="small"></span></div>
+        <div class="table-wrap" id="summaryTable"></div>
+      </article>
+    </section>
+  </div>
+
+  <script>
+    const metricCards = document.getElementById("metricCards");
+    const generatedAt = document.getElementById("generatedAt");
+    const providerStatus = document.getElementById("providerStatus");
+    const refreshButton = document.getElementById("refreshButton");
+    const autoRefresh = document.getElementById("autoRefresh");
+    let refreshTimer = null;
+
+    const COLUMN_LABELS = {
+      conviction_rank: "优先级 / Rank",
+      push_rank: "推送排名 / Push Rank",
+      symbol: "代码 / Symbol",
+      display_symbol: "展示代码 / Display",
+      name: "名称 / Name",
+      dashboard_action: "看板动作 / Dashboard Action",
+      intraday: "盘中信号 / Intraday",
+      eod_bias: "日线偏向 / EOD Bias",
+      composite_score: "综合得分 / Composite Score",
+      change_reason: "变化原因 / Change Reason",
+      review_gate: "验证闸门 / Review Gate",
+      ts: "时间 / Timestamp",
+      strategy: "策略 / Strategy",
+      signal: "信号 / Signal",
+      score: "分值 / Score",
+      alignment: "方向一致性 / Alignment",
+      current_level: "当前点数 / Current Level",
+      current_price: "当前价格 / Current Price",
+      change_value: "涨跌点/额 / Change",
+      change_pct: "涨跌幅 / Change %",
+      prev_close: "昨收 / Prev Close",
+      quote_source: "数据来源 / Source",
+      updated_at: "更新时间 / Updated At"
+    };
+
+    const VALUE_LABELS = {
+      BUY: "买入 / BUY",
+      SELL: "卖出 / SELL",
+      HOLD: "持有 / HOLD",
+      NEUTRAL: "中性 / NEUTRAL",
+      PRIORITY_BUY: "优先买入 / PRIORITY_BUY",
+      PRIORITY_SELL: "优先卖出 / PRIORITY_SELL",
+      HOLD_OBSERVE: "持有观察 / HOLD_OBSERVE",
+      BUY_CONFIRM: "买入确认 / BUY_CONFIRM",
+      SELL_CONFIRM: "卖出确认 / SELL_CONFIRM",
+      CONFIRM: "确认 / CONFIRM",
+      REJECT: "拒绝 / REJECT",
+      INSUFFICIENT_DATA: "数据不足 / INSUFFICIENT_DATA",
+      NO_DATA: "无数据 / NO_DATA",
+      UPTREND: "上升趋势 / UPTREND",
+      DOWNTREND: "下降趋势 / DOWNTREND",
+      NEW_ENTRY: "新入选 / NEW_ENTRY",
+      REALIGNED: "重新对齐 / REALIGNED",
+      SCORE_JUMP: "分值跳升 / SCORE_JUMP",
+      SCORE_DROP: "分值走弱 / SCORE_DROP"
+    };
+
+    function tagClass(value) {
+      const text = String(value || "").toUpperCase();
+      if (text.includes("BUY")) return "buy";
+      if (text.includes("SELL")) return "sell";
+      if (text.includes("HOLD") || text.includes("WATCH")) return "hold";
+      return "neutral";
+    }
+
+    function pctClass(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "flat";
+      if (number > 0) return "up";
+      if (number < 0) return "down";
+      return "flat";
+    }
+
+    function labelOf(column) {
+      return COLUMN_LABELS[column] || column;
+    }
+
+    function translateValue(value) {
+      if (value === null || value === undefined) return "-";
+      const text = String(value);
+      return VALUE_LABELS[text] || text;
+    }
+
+    function formatTimestamp(value) {
+      if (!value) return "-";
+      return String(value).replace("T", " ").replace("+08:00", "");
+    }
+
+    function formatNumber(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "-";
+      return number >= 100 ? number.toFixed(2) : number.toFixed(4);
+    }
+
+    function formatPercent(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "-";
+      const pct = number * 100;
+      const prefix = pct > 0 ? "+" : "";
+      return `${prefix}${pct.toFixed(2)}%`;
+    }
+
+    function formatSignedNumber(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "-";
+      const absValue = Math.abs(number);
+      const formatted = absValue >= 100 ? absValue.toFixed(2) : absValue.toFixed(4);
+      if (number > 0) return `+${formatted}`;
+      if (number < 0) return `-${formatted}`;
+      return formatted;
+    }
+
+    function renderMetrics(metrics) {
+      const cards = [
+        ["Summary Rows｜汇总行数", metrics.summary_rows],
+        ["Intraday Signals｜盘中信号", metrics.intraday_signal_rows],
+        ["Push Rows｜推送行数", metrics.push_rows],
+        ["Active Intraday｜活跃盘中", metrics.active_intraday_count],
+        ["Priority Actions｜优先动作", metrics.priority_action_count],
+        ["Preclose Rows｜收盘前报告", metrics.preclose_rows],
+      ];
+      metricCards.innerHTML = cards.map(([label, value]) => `
+        <div class="card">
+          <div class="small">${label}</div>
+          <span class="metric">${value ?? 0}</span>
+        </div>
+      `).join("");
+    }
+
+    function quoteCountText(gainers, losers, flat) {
+      const total = (gainers?.length || 0) + (losers?.length || 0) + (flat?.length || 0);
+      return `总数 ${total} ｜ 涨 ${gainers?.length || 0} ｜ 跌 ${losers?.length || 0} ｜ 平/无数据 ${flat?.length || 0}`;
+    }
+
+    function summarizeFlatRows(rows) {
+      if (!rows || rows.length === 0) {
+        return "平盘/无数据：无";
+      }
+      const names = rows.slice(0, 6).map((row) => row.name || row.symbol || "-");
+      const remaining = rows.length - names.length;
+      const suffix = remaining > 0 ? ` 等 ${remaining} 个` : "";
+      return `平盘/无数据：${names.join("、")}${suffix}`;
+    }
+
+    function renderTable(containerId, rows, preferredColumns) {
+      const container = document.getElementById(containerId);
+      if (!rows || rows.length === 0) {
+        container.innerHTML = `<div class="small" style="padding:16px;">暂无数据</div>`;
+        return;
+      }
+      const columns = preferredColumns.filter((column) => rows.some((row) => Object.prototype.hasOwnProperty.call(row, column)));
+      const header = columns.map((column) => `<th>${labelOf(column)}</th>`).join("");
+      const body = rows.map((row) => {
+        const cells = columns.map((column) => {
+          const value = row[column];
+          if (column === "change_pct") {
+            return `<td><span class="tag ${pctClass(value)}">${formatPercent(value)}</span></td>`;
+          }
+          if (column === "change_value") {
+            return `<td><span class="tag ${pctClass(value)}">${formatSignedNumber(value)}</span></td>`;
+          }
+          if (column.includes("signal") || column.includes("action") || column === "intraday" || column === "alignment" || column === "review_gate") {
+            return `<td><span class="tag ${tagClass(value)}">${translateValue(value)}</span></td>`;
+          }
+          if (column === "updated_at" || column === "ts") {
+            return `<td>${formatTimestamp(value)}</td>`;
+          }
+          if (["current_level", "current_price", "prev_close", "score", "composite_score"].includes(column)) {
+            return `<td>${formatNumber(value)}</td>`;
+          }
+          return `<td>${translateValue(value)}</td>`;
+        }).join("");
+        return `<tr>${cells}</tr>`;
+      }).join("");
+      container.innerHTML = `<table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>`;
+    }
+
+    function renderQuoteBoards(prefix, gainers, losers, flat, currentColumn) {
+      const columns = ["symbol", "name", currentColumn, "prev_close", "change_value", "change_pct"];
+      renderTable(`${prefix}QuoteGainersTable`, gainers, columns);
+      renderTable(`${prefix}QuoteLosersTable`, losers, columns);
+      document.getElementById(`${prefix}QuoteCount`).textContent = quoteCountText(gainers, losers, flat);
+      document.getElementById(`${prefix}GainersCount`).textContent = `${(gainers || []).length} 行 / rows`;
+      document.getElementById(`${prefix}LosersCount`).textContent = `${(losers || []).length} 行 / rows`;
+      document.getElementById(`${prefix}QuoteFlatNote`).textContent = summarizeFlatRows(flat || []);
+    }
+
+    function renderStatus(snapshot) {
+      const provider = snapshot.provider_status || {};
+      generatedAt.textContent = `快照时间：${snapshot.generated_at || "-"}`;
+      providerStatus.textContent = `大陆实时源 / Mainland: ${provider.mainland_provider || "-"} ｜ 补充源 / Fallback: ${provider.fallback_provider || "-"} ｜ 港股源 / HK Provider: ${provider.hk_provider || "-"} ｜ 港股状态 / HK Status: ${provider.hk_status || "-"} ｜ 行情模式 / Quote Mode: ${provider.quote_status || "-"} ｜ 分钟频率 / Bar: ${provider.quote_bar_frequency || "-"}`;
+      document.getElementById("actionFocusCount").textContent = `${(snapshot.tables.action_focus || []).length} 行 / rows`;
+      document.getElementById("pushCount").textContent = `${(snapshot.tables.push_candidates || []).length} 行 / rows`;
+      document.getElementById("intradayCount").textContent = `${(snapshot.tables.latest_intraday || []).length} 行 / rows`;
+      document.getElementById("summaryCount").textContent = `${(snapshot.tables.summary || []).length} 行 / rows`;
+    }
+
+    function renderSnapshot(snapshot) {
+      renderMetrics(snapshot.metrics || {});
+      renderStatus(snapshot);
+      renderQuoteBoards("index", snapshot.tables.index_quote_gainers || [], snapshot.tables.index_quote_losers || [], snapshot.tables.index_quote_flat || [], "current_level");
+      renderQuoteBoards("etf", snapshot.tables.etf_quote_gainers || [], snapshot.tables.etf_quote_losers || [], snapshot.tables.etf_quote_flat || [], "current_price");
+      renderTable("actionFocusTable", snapshot.tables.action_focus, ["conviction_rank", "symbol", "name", "dashboard_action", "intraday", "eod_bias", "composite_score"]);
+      renderTable("pushTable", snapshot.tables.push_candidates, ["push_rank", "symbol", "name", "dashboard_action", "change_reason", "composite_score", "review_gate"]);
+      renderTable("intradayTable", snapshot.tables.latest_intraday, ["ts", "symbol", "strategy", "signal", "score"]);
+      renderTable("summaryTable", snapshot.tables.summary, ["conviction_rank", "symbol", "name", "intraday", "dashboard_action", "alignment", "composite_score"]);
+    }
+
+    async function loadSnapshot() {
+      const response = await fetch("/api/dashboard");
+      const data = await response.json();
+      renderSnapshot(data);
+    }
+
+    async function refreshSnapshot() {
+      refreshButton.disabled = true;
+      refreshButton.textContent = "刷新中…";
+      try {
+        const response = await fetch("/api/dashboard/refresh", { method: "POST" });
+        const data = await response.json();
+        renderSnapshot(data);
+      } catch (error) {
+        providerStatus.textContent = `刷新失败：${error}`;
+      } finally {
+        refreshButton.disabled = false;
+        refreshButton.textContent = "立即刷新盘中数据";
+      }
+    }
+
+    function syncAutoRefresh() {
+      if (refreshTimer) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+      }
+      if (autoRefresh.checked) {
+        refreshTimer = setInterval(loadSnapshot, 15000);
+      }
+    }
+
+    refreshButton.addEventListener("click", refreshSnapshot);
+    autoRefresh.addEventListener("change", syncAutoRefresh);
+
+    loadSnapshot();
+    syncAutoRefresh();
+  </script>
+</body>
+</html>
