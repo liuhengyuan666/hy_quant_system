@@ -10,3 +10,17 @@ window_am_start = "09:30"
 window_am_end = "11:30"
 window_pm_start = "13:00"
 window_pm_end = "15:00"
+
+[runtime.preclose]
+enabled = true
+trigger_time = "14:45"
+decision_time = "14:50"
+output_dir = "reports/preclose"
+
+[runtime.hk_realtime]
+provider = "none"
+
+[runtime.hk_realtime.futu]
+host = "127.0.0.1"
+port = 11111
+is_encrypt = false

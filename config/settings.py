@@ -5,10 +5,7 @@ from pathlib import Path
 from typing import Any
 import os
 
-try:
-    import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib
+import tomllib
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +59,15 @@ class RuntimeConfig:
     intraday_window_am_end: str
     intraday_window_pm_start: str
     intraday_window_pm_end: str
+    preclose_enabled: bool
+    preclose_trigger_time: str
+    preclose_decision_time: str
+    preclose_output_dir: str
+    hk_realtime_provider: str = "none"
+    hk_realtime_futu_host: str = "127.0.0.1"
+    hk_realtime_futu_port: int = 11111
+    hk_realtime_futu_is_encrypt: bool = False
+    hk_realtime_futu_symbol_map: dict[str, str] | None = None
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -166,6 +172,9 @@ def load_runtime_config(config_path: Path | None = None) -> RuntimeConfig:
     raw = _load_toml(path) if path.exists() else {}
     section = raw.get("runtime", {})
     intraday = section.get("intraday", {})
+    preclose = section.get("preclose", {})
+    hk_realtime = section.get("hk_realtime", {})
+    futu = hk_realtime.get("futu", {})
 
     interval_minutes = int(intraday.get("interval_minutes", 5))
     if interval_minutes < 1:
@@ -174,6 +183,18 @@ def load_runtime_config(config_path: Path | None = None) -> RuntimeConfig:
     lookback_bars = int(intraday.get("lookback_bars", 120))
     if lookback_bars < 20:
         lookback_bars = 20
+
+    hk_provider = str(os.getenv("QUANT_HK_REALTIME_PROVIDER", hk_realtime.get("provider", "none"))).strip().lower() or "none"
+    futu_host = str(os.getenv("QUANT_FUTU_HOST", futu.get("host", "127.0.0.1"))).strip() or "127.0.0.1"
+    futu_port = int(os.getenv("QUANT_FUTU_PORT", str(futu.get("port", 11111))))
+    futu_is_encrypt = str(os.getenv("QUANT_FUTU_IS_ENCRYPT", str(futu.get("is_encrypt", False)))).strip().lower() == "true"
+
+    raw_symbol_map = futu.get("symbol_map", {})
+    hk_symbol_map = {
+        str(symbol).strip(): str(code).strip()
+        for symbol, code in raw_symbol_map.items()
+        if str(symbol).strip() and str(code).strip()
+    }
 
     return RuntimeConfig(
         timezone=str(section.get("timezone", "Asia/Shanghai")),
@@ -185,4 +206,13 @@ def load_runtime_config(config_path: Path | None = None) -> RuntimeConfig:
         intraday_window_am_end=str(intraday.get("window_am_end", "11:30")),
         intraday_window_pm_start=str(intraday.get("window_pm_start", "13:00")),
         intraday_window_pm_end=str(intraday.get("window_pm_end", "15:00")),
+        preclose_enabled=bool(preclose.get("enabled", True)),
+        preclose_trigger_time=str(preclose.get("trigger_time", "14:45")),
+        preclose_decision_time=str(preclose.get("decision_time", "14:50")),
+        preclose_output_dir=str(preclose.get("output_dir", "reports/preclose")),
+        hk_realtime_provider=hk_provider,
+        hk_realtime_futu_host=futu_host,
+        hk_realtime_futu_port=futu_port,
+        hk_realtime_futu_is_encrypt=futu_is_encrypt,
+        hk_realtime_futu_symbol_map=hk_symbol_map,
     )
