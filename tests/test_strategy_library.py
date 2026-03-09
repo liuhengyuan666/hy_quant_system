@@ -2,25 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-try:
-    import pandas as pd
-except Exception:
-    pd = None
+import pandas as pd
 
-try:
-    from strategy_engine.base import Signal
-    from strategy_engine.library import list_strategy_names, list_strategy_names_by_mode, resolve_strategy_specs
-except Exception:
-    Signal = None
-    list_strategy_names = None
-    list_strategy_names_by_mode = None
-    resolve_strategy_specs = None
+from strategy_engine.base import CrossSectionalStrategy, Signal, Strategy
+from strategy_engine.library import list_strategy_names, list_strategy_names_by_horizon, list_strategy_names_by_mode, resolve_strategy_specs
 
 
 def _make_frame(size: int, drift: float = 0.002) -> pd.DataFrame:
-    if pd is None:
-        raise RuntimeError("pandas unavailable")
-
     closes = [100.0]
     for index in range(1, size):
         closes.append(closes[-1] * (1 + drift + ((index % 7) - 3) * 0.0008))
@@ -39,10 +27,6 @@ def _make_frame(size: int, drift: float = 0.002) -> pd.DataFrame:
     )
 
 
-@unittest.skipIf(
-    pd is None or Signal is None or list_strategy_names is None or list_strategy_names_by_mode is None or resolve_strategy_specs is None,
-    "runtime dependencies unavailable",
-)
 class StrategyLibraryTests(unittest.TestCase):
     def test_strategy_count(self):
         names = list_strategy_names()
@@ -62,13 +46,22 @@ class StrategyLibraryTests(unittest.TestCase):
         specs = resolve_strategy_specs(supported_mode="intraday")
         self.assertTrue(all("intraday" in item.supported_modes for item in specs))
 
+    def test_strategy_horizons_are_partitioned(self):
+        short_term = list_strategy_names_by_horizon("short_term")
+        long_term = list_strategy_names_by_horizon("long_term")
+        self.assertEqual(len(short_term), 12)
+        self.assertEqual(len(long_term), 8)
+        self.assertEqual(set(short_term).intersection(set(long_term)), set())
+        self.assertIn("Momentum_60_strategy", long_term)
+        self.assertIn("EMA_cross_strategy", short_term)
+
     def test_single_strategies_generate_signal(self):
         specs = resolve_strategy_specs()
         frame = _make_frame(320, drift=0.0018)
         allowed = {Signal.BUY, Signal.SELL, Signal.HOLD}
 
         for spec in specs:
-            if spec.mode != "single":
+            if spec.mode != "single" or not isinstance(spec.engine, Strategy):
                 continue
             signal = spec.engine.generate_signal(frame)
             self.assertIn(signal, allowed, spec.name)
@@ -91,7 +84,7 @@ class StrategyLibraryTests(unittest.TestCase):
 
         allowed = {Signal.BUY, Signal.SELL, Signal.HOLD}
         for spec in specs:
-            if spec.mode != "cross":
+            if spec.mode != "cross" or not isinstance(spec.engine, CrossSectionalStrategy):
                 continue
             if spec.universe == "etf":
                 scoped = {key: value for key, value in data_by_symbol.items() if key in {"510300", "159915", "513130"}}

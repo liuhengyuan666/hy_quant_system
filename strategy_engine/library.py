@@ -480,19 +480,21 @@ class StrategySpec:
     engine: Strategy | CrossSectionalStrategy
     supported_modes: tuple[str, ...] = ("eod",)
     profile: str = "standard"
+    horizon: str = "short_term"
+    report_weight: float = 1.0
 
 
 def build_strategy_specs() -> list[StrategySpec]:
     return [
-        StrategySpec(name="MA_strategy", mode="single", universe="all", engine=MATrendStrategy(), supported_modes=("eod", "intraday"), profile="light"),
-        StrategySpec(name="RSRS_strategy", mode="single", universe="all", engine=RSRSTimingStrategy()),
-        StrategySpec(name="EMA_cross_strategy", mode="single", universe="all", engine=EMACrossStrategy(), supported_modes=("eod", "intraday"), profile="light"),
-        StrategySpec(name="Triple_MA_strategy", mode="single", universe="all", engine=TripleMAStrategy()),
-        StrategySpec(name="MACD_hist_strategy", mode="single", universe="all", engine=MACDHistogramStrategy(), supported_modes=("eod", "intraday"), profile="light"),
-        StrategySpec(name="RSI_reversion_strategy", mode="single", universe="all", engine=RSIReversionStrategy(), supported_modes=("eod", "intraday"), profile="light"),
-        StrategySpec(name="Bollinger_breakout_strategy", mode="single", universe="all", engine=BollingerBreakoutStrategy(), supported_modes=("eod", "intraday"), profile="light"),
-        StrategySpec(name="Bollinger_reversion_strategy", mode="single", universe="all", engine=BollingerReversionStrategy()),
-        StrategySpec(name="Donchian_breakout_strategy", mode="single", universe="all", engine=DonchianBreakoutStrategy(), supported_modes=("eod", "intraday"), profile="light"),
+        StrategySpec(name="MA_strategy", mode="single", universe="all", engine=MATrendStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
+        StrategySpec(name="RSRS_strategy", mode="single", universe="all", engine=RSRSTimingStrategy(), horizon="long_term"),
+        StrategySpec(name="EMA_cross_strategy", mode="single", universe="all", engine=EMACrossStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
+        StrategySpec(name="Triple_MA_strategy", mode="single", universe="all", engine=TripleMAStrategy(), horizon="long_term"),
+        StrategySpec(name="MACD_hist_strategy", mode="single", universe="all", engine=MACDHistogramStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
+        StrategySpec(name="RSI_reversion_strategy", mode="single", universe="all", engine=RSIReversionStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
+        StrategySpec(name="Bollinger_breakout_strategy", mode="single", universe="all", engine=BollingerBreakoutStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
+        StrategySpec(name="Bollinger_reversion_strategy", mode="single", universe="all", engine=BollingerReversionStrategy(), horizon="short_term"),
+        StrategySpec(name="Donchian_breakout_strategy", mode="single", universe="all", engine=DonchianBreakoutStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
         StrategySpec(
             name="Momentum_20_strategy",
             mode="single",
@@ -500,22 +502,24 @@ def build_strategy_specs() -> list[StrategySpec]:
             engine=MomentumStrategy(lookback_days=20, threshold=0.03, name="Momentum_20_strategy"),
             supported_modes=("eod", "intraday"),
             profile="light",
+            horizon="short_term",
         ),
         StrategySpec(
             name="Momentum_60_strategy",
             mode="single",
             universe="all",
             engine=MomentumStrategy(lookback_days=60, threshold=0.08, name="Momentum_60_strategy"),
+            horizon="long_term",
         ),
-        StrategySpec(name="ROC_20_strategy", mode="single", universe="all", engine=ROCStrategy(), supported_modes=("eod", "intraday"), profile="light"),
-        StrategySpec(name="Volatility_breakout_strategy", mode="single", universe="all", engine=VolatilityBreakoutStrategy(), supported_modes=("eod", "intraday"), profile="light"),
-        StrategySpec(name="ATR_channel_strategy", mode="single", universe="all", engine=ATRChannelStrategy()),
-        StrategySpec(name="KDJ_cross_strategy", mode="single", universe="all", engine=KDJCrossStrategy(), supported_modes=("eod", "intraday"), profile="light"),
-        StrategySpec(name="CCI_reversion_strategy", mode="single", universe="all", engine=CCIReversionStrategy()),
-        StrategySpec(name="OBV_trend_strategy", mode="single", universe="all", engine=OBVTrendStrategy(), supported_modes=("eod", "intraday"), profile="light"),
-        StrategySpec(name="ADX_trend_strategy", mode="single", universe="all", engine=ADXTrendStrategy()),
-        StrategySpec(name="ETF_rotation_strategy", mode="cross", universe="etf", engine=ETFRotationStrategy()),
-        StrategySpec(name="MultiFactor_strategy", mode="cross", universe="etf", engine=MultiFactorStrategy()),
+        StrategySpec(name="ROC_20_strategy", mode="single", universe="all", engine=ROCStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
+        StrategySpec(name="Volatility_breakout_strategy", mode="single", universe="all", engine=VolatilityBreakoutStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
+        StrategySpec(name="ATR_channel_strategy", mode="single", universe="all", engine=ATRChannelStrategy(), horizon="long_term"),
+        StrategySpec(name="KDJ_cross_strategy", mode="single", universe="all", engine=KDJCrossStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
+        StrategySpec(name="CCI_reversion_strategy", mode="single", universe="all", engine=CCIReversionStrategy(), horizon="short_term"),
+        StrategySpec(name="OBV_trend_strategy", mode="single", universe="all", engine=OBVTrendStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="long_term"),
+        StrategySpec(name="ADX_trend_strategy", mode="single", universe="all", engine=ADXTrendStrategy(), horizon="long_term"),
+        StrategySpec(name="ETF_rotation_strategy", mode="cross", universe="etf", engine=ETFRotationStrategy(), horizon="long_term", report_weight=1.2),
+        StrategySpec(name="MultiFactor_strategy", mode="cross", universe="etf", engine=MultiFactorStrategy(), horizon="long_term", report_weight=1.2),
     ]
 
 
@@ -527,10 +531,20 @@ def list_strategy_names_by_mode(supported_mode: str) -> list[str]:
     return [item.name for item in build_strategy_specs() if supported_mode in item.supported_modes]
 
 
-def resolve_strategy_specs(selected_names: Sequence[str] | None = None, supported_mode: str | None = None) -> list[StrategySpec]:
+def list_strategy_names_by_horizon(horizon: str) -> list[str]:
+    return [item.name for item in build_strategy_specs() if item.horizon == horizon]
+
+
+def resolve_strategy_specs(
+    selected_names: Sequence[str] | None = None,
+    supported_mode: str | None = None,
+    horizon: str | None = None,
+) -> list[StrategySpec]:
     specs = build_strategy_specs()
     if supported_mode is not None:
         specs = [item for item in specs if supported_mode in item.supported_modes]
+    if horizon is not None:
+        specs = [item for item in specs if item.horizon == horizon]
     if selected_names is None:
         return specs
 
