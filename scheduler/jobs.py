@@ -7,8 +7,12 @@ from config.settings import load_universe_config
 from data_service.sync_market import sync_market_data
 from data_storage.indicators import refresh_technical_indicators
 from signal_service.eod_generator import export_eod_signals, generate_eod_signals
+from signal_service.data_gap_report import export_data_gap_report
+from signal_service.daily_conclusion_report import export_daily_conclusion_report
+from signal_service.preclose_decision import run_preclose_analysis
 from signal_service.summary_view import export_signal_summary, resolve_summary_artifact_paths
 from signal_service.analysis import analyze_signals_csv
+from signal_service.strategy_matrix_report import export_strategy_matrix_report
 from signal_service.secondary_validation import secondary_validate_signals_csv
 from signal_service.signal_generator import export_daily_signals, generate_daily_signals
 
@@ -111,10 +115,39 @@ def run_eod_and_analyze_pipeline(bar_frequencies: tuple[str, ...] = ("D", "W", "
         secondary_validations[frequency] = secondary_validate_signals_csv(export_path)
     summary_path = export_signal_summary()
     artifact_paths = resolve_summary_artifact_paths(summary_path)
+    preclose_result = run_preclose_analysis(use_intraday_snapshot=False)
+    daily_conclusion_result = export_daily_conclusion_report()
+    data_gap_result = export_data_gap_report()
+    strategy_matrix_result = export_strategy_matrix_report()
     return {
         **pipeline_result,
         "analysis": analyses,
         "secondary_validation": secondary_validations,
         "summary_path": str(summary_path),
         "push_path": str(artifact_paths["push_candidates_path"]),
+        "preclose_path": str(preclose_result["csv_path"]),
+        "preclose_json_path": str(preclose_result["json_path"]),
+        "daily_conclusion_path": str(daily_conclusion_result["csv_path"]),
+        "daily_conclusion_operation_path": str(daily_conclusion_result["operation_csv_path"]),
+        "daily_conclusion_json_path": str(daily_conclusion_result["json_path"]),
+        "daily_conclusion_xlsx_path": str(daily_conclusion_result["xlsx_path"]),
+        "data_gap_path": str(data_gap_result["csv_path"]),
+        "data_gap_xlsx_path": str(data_gap_result["xlsx_path"]),
+        "strategy_matrix_path": str(strategy_matrix_result["xlsx_path"]),
     }
+
+
+def run_preclose_analysis_pipeline(signal_ts=None, use_intraday_snapshot: bool = False) -> dict[str, object]:
+    return run_preclose_analysis(signal_ts=signal_ts, use_intraday_snapshot=use_intraday_snapshot)
+
+
+def export_strategy_matrix_report_pipeline() -> dict[str, object]:
+    return export_strategy_matrix_report()
+
+
+def export_daily_conclusion_report_pipeline() -> dict[str, object]:
+    return export_daily_conclusion_report()
+
+
+def export_data_gap_report_pipeline() -> dict[str, object]:
+    return export_data_gap_report()
