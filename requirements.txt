@@ -1,6 +1,8 @@
 pandas>=2.1.0
 numpy>=1.26.0
 akshare>=1.17.0
+pytdx>=1.72
+futu-api>=10.0.6008
 backtrader>=1.9.78.123
 TA-Lib>=0.4.28
 SQLAlchemy>=2.0.0
@@ -9,4 +11,5 @@ fastapi>=0.115.0
 uvicorn>=0.30.0
 APScheduler>=3.10.4
 python-dateutil>=2.9.0
+xlsxwriter>=3.2.0
 tomli>=2.0.1; python_version < "3.11"
