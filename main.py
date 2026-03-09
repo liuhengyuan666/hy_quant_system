@@ -128,6 +128,23 @@ def command_run_intraday_once() -> None:
     print(json.dumps(result, ensure_ascii=False))
 
 
+def command_run_dashboard(host: str, port: int) -> None:
+    import uvicorn
+
+    from web_ui.app import create_app
+
+    uvicorn.run(create_app(), host=host, port=port)
+
+
+def command_run_preclose_analysis(use_intraday_snapshot: bool) -> None:
+    from core.clock import now_shanghai
+    from scheduler.jobs import run_preclose_analysis_pipeline
+
+    signal_ts = now_shanghai() if use_intraday_snapshot else None
+    result = run_preclose_analysis_pipeline(signal_ts=signal_ts, use_intraday_snapshot=use_intraday_snapshot)
+    print(json.dumps(result, ensure_ascii=False))
+
+
 def command_export_signal_summary() -> None:
     from signal_service.summary_view import export_signal_summary, resolve_summary_artifact_paths
 
@@ -142,6 +159,27 @@ def command_export_signal_summary() -> None:
             ensure_ascii=False,
         )
     )
+
+
+def command_export_strategy_matrix() -> None:
+    from scheduler.jobs import export_strategy_matrix_report_pipeline
+
+    result = export_strategy_matrix_report_pipeline()
+    print(json.dumps(result, ensure_ascii=False))
+
+
+def command_export_daily_conclusion() -> None:
+    from scheduler.jobs import export_daily_conclusion_report_pipeline
+
+    result = export_daily_conclusion_report_pipeline()
+    print(json.dumps(result, ensure_ascii=False))
+
+
+def command_export_data_gaps() -> None:
+    from scheduler.jobs import export_data_gap_report_pipeline
+
+    result = export_data_gap_report_pipeline()
+    print(json.dumps(result, ensure_ascii=False))
 
 
 def command_gen_eod_signals(strategies: str | None, frequencies: str | None) -> None:
@@ -207,7 +245,15 @@ def build_parser() -> argparse.ArgumentParser:
     intraday_parser = sub.add_parser("run-intraday")
     intraday_parser.add_argument("--iterations", type=int, default=None)
     sub.add_parser("run-intraday-once")
+    dashboard_parser = sub.add_parser("run-dashboard")
+    dashboard_parser.add_argument("--host", default="127.0.0.1")
+    dashboard_parser.add_argument("--port", type=int, default=8000)
+    preclose_parser = sub.add_parser("run-preclose-analysis")
+    preclose_parser.add_argument("--use-intraday-snapshot", action="store_true")
     sub.add_parser("export-signal-summary")
+    sub.add_parser("export-daily-conclusion")
+    sub.add_parser("export-data-gaps")
+    sub.add_parser("export-strategy-matrix")
     sub.add_parser("run-scheduler")
 
     backtest_parser = sub.add_parser("backtest")
@@ -247,8 +293,18 @@ def main() -> None:
         command_run_intraday(iterations=args.iterations)
     elif args.command == "run-intraday-once":
         command_run_intraday_once()
+    elif args.command == "run-dashboard":
+        command_run_dashboard(host=args.host, port=args.port)
+    elif args.command == "run-preclose-analysis":
+        command_run_preclose_analysis(use_intraday_snapshot=args.use_intraday_snapshot)
     elif args.command == "export-signal-summary":
         command_export_signal_summary()
+    elif args.command == "export-daily-conclusion":
+        command_export_daily_conclusion()
+    elif args.command == "export-data-gaps":
+        command_export_data_gaps()
+    elif args.command == "export-strategy-matrix":
+        command_export_strategy_matrix()
     elif args.command == "run-scheduler":
         from scheduler.run_daily import start_scheduler
 
