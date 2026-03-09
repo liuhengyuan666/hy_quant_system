@@ -42,3 +42,31 @@ def is_trading_session(reference: datetime | None = None, runtime_config: Runtim
     pm_start = _parse_time(config.intraday_window_pm_start)
     pm_end = _parse_time(config.intraday_window_pm_end)
     return (am_start <= current_time <= am_end) or (pm_start <= current_time <= pm_end)
+
+
+def is_preclose_window(reference: datetime | None = None, runtime_config: RuntimeConfig | None = None) -> bool:
+    current = reference.astimezone(SHANGHAI_TZ) if reference is not None else now_shanghai()
+    if current.weekday() >= 5:
+        return False
+
+    config = runtime_config or load_runtime_config()
+    if not config.preclose_enabled:
+        return False
+
+    current_time = current.time()
+    trigger_time = _parse_time(config.preclose_trigger_time)
+    pm_start = _parse_time(config.intraday_window_pm_start)
+    pm_end = _parse_time(config.intraday_window_pm_end)
+    return pm_start <= current_time <= pm_end and current_time >= trigger_time
+
+
+def resolve_preclose_signal_date(
+    reference: datetime | None = None,
+    runtime_config: RuntimeConfig | None = None,
+    use_intraday_snapshot: bool = False,
+) -> date:
+    current = reference.astimezone(SHANGHAI_TZ) if reference is not None else now_shanghai()
+    config = runtime_config or load_runtime_config()
+    if use_intraday_snapshot and is_preclose_window(current, runtime_config=config):
+        return current.date()
+    return latest_closed_trading_date(current)
