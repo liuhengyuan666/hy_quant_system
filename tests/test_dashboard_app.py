@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+import tempfile
+from pathlib import Path
+import unittest
+from unittest.mock import patch
+
+from fastapi.testclient import TestClient
+
+from web_ui.app import create_app
+
+
+class DashboardAppTests(unittest.TestCase):
+    def test_dashboard_routes_return_expected_payloads(self):
+        market_overview = {
+            "quote_status": "实时数据库 / Live DB",
+            "quote_error": None,
+            "quote_bar_frequency": "5",
+            "index_quotes": [{"symbol": "000300", "name": "沪深300", "current_level": 3812.12, "change_value": 46.21, "change_pct": 0.0123}],
+            "etf_quotes": [{"symbol": "510300", "name": "沪深300ETF", "current_price": 4.52, "change_value": 0.03, "change_pct": 0.0067}],
+            "index_quote_gainers": [{"symbol": "000300", "name": "沪深300", "current_level": 3812.12, "change_value": 46.21, "change_pct": 0.0123}],
+            "index_quote_losers": [],
+            "index_quote_flat": [],
+            "etf_quote_gainers": [{"symbol": "510300", "name": "沪深300ETF", "current_price": 4.52, "change_value": 0.03, "change_pct": 0.0067}],
+            "etf_quote_losers": [],
+            "etf_quote_flat": [],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "web_ui.dashboard_service._build_market_overview_tables",
+            return_value=market_overview,
+        ):
+            report_root = Path(temp_dir) / "reports"
+            (report_root / "summary").mkdir(parents=True)
+            (report_root / "intraday").mkdir(parents=True)
+            (report_root / "summary" / "signal_summary_20260309_1102.csv").write_text(
+                "conviction_rank,symbol,name,intraday,dashboard_action,composite_score\n"
+                "1,510300,沪深300ETF,BUY,PRIORITY_BUY,7.0\n",
+                encoding="utf-8-sig",
+            )
+
+            client = TestClient(create_app(report_root=report_root))
+            health = client.get("/api/health")
+            snapshot = client.get("/api/dashboard")
+            html = client.get("/")
+
+        self.assertEqual(health.status_code, 200)
+        self.assertEqual(health.json()["status"], "ok")
+        self.assertEqual(snapshot.status_code, 200)
+        self.assertEqual(snapshot.json()["metrics"]["summary_rows"], 1)
+        self.assertEqual(snapshot.json()["metrics"]["index_quote_rows"], 1)
+        self.assertEqual(html.status_code, 200)
+        self.assertIn("盘中监控仪表盘", html.text)
+        self.assertIn("Index Pool｜指数池行情", html.text)
+        self.assertIn("Top Gainers｜涨幅榜", html.text)
+        self.assertIn("Top Losers｜跌幅榜", html.text)
+        self.assertIn("涨跌点/额 / Change", html.text)
+
+    def test_refresh_route_returns_refresh_snapshot(self):
+        client = TestClient(create_app())
+        payload = {"metrics": {"summary_rows": 3}, "tables": {"action_focus": [], "push_candidates": [], "latest_intraday": [], "summary": []}}
+        with patch("web_ui.app.refresh_dashboard_snapshot", return_value=payload):
+            response = client.post("/api/dashboard/refresh")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["metrics"]["summary_rows"], 3)
+
+
+if __name__ == "__main__":
+    unittest.main()
