@@ -5,6 +5,7 @@ from typing import Sequence
 
 import pandas as pd
 
+from data_service.akshare_runtime import disable_requests_env_proxy
 from data_service.normalize import normalize_ohlcv
 
 try:
@@ -23,13 +24,14 @@ def fetch_etf_history(
         raise ImportError("akshare is required for data fetching")
 
     end = end_date or datetime.now().strftime("%Y%m%d")
-    raw = ak.fund_etf_hist_em(
-        symbol=symbol,
-        period="daily",
-        start_date=start_date,
-        end_date=end,
-        adjust=adjust,
-    )
+    with disable_requests_env_proxy():
+        raw = ak.fund_etf_hist_em(
+            symbol=symbol,
+            period="daily",
+            start_date=start_date,
+            end_date=end,
+            adjust=adjust,
+        )
     return normalize_ohlcv(raw, symbol=symbol)
 
 
