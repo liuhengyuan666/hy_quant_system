@@ -5,7 +5,15 @@ import unittest
 import pandas as pd
 
 from strategy_engine.base import CrossSectionalStrategy, Signal, Strategy
-from strategy_engine.library import list_strategy_names, list_strategy_names_by_horizon, list_strategy_names_by_mode, resolve_strategy_specs
+from strategy_engine.library import (
+    MARKET_HYPOTHESIS_ORDER,
+    list_strategy_names,
+    list_strategy_names_by_horizon,
+    list_strategy_names_by_hypothesis,
+    list_strategy_names_by_mode,
+    market_hypothesis_label,
+    resolve_strategy_specs,
+)
 
 
 def _make_frame(size: int, drift: float = 0.002) -> pd.DataFrame:
@@ -54,6 +62,27 @@ class StrategyLibraryTests(unittest.TestCase):
         self.assertEqual(set(short_term).intersection(set(long_term)), set())
         self.assertIn("Momentum_60_strategy", long_term)
         self.assertIn("EMA_cross_strategy", short_term)
+
+    def test_strategy_market_hypotheses_are_partitioned(self):
+        grouped = {
+            hypothesis: list_strategy_names_by_hypothesis(hypothesis)
+            for hypothesis in MARKET_HYPOTHESIS_ORDER
+            if hypothesis != "uncategorized"
+        }
+
+        self.assertEqual(len(grouped["trend_following"]), 5)
+        self.assertEqual(len(grouped["mean_reversion"]), 4)
+        self.assertEqual(len(grouped["momentum"]), 4)
+        self.assertEqual(len(grouped["volatility_breakout"]), 4)
+        self.assertEqual(len(grouped["volume_based"]), 1)
+        self.assertEqual(len(grouped["cross_asset_allocation"]), 2)
+        self.assertEqual(list_strategy_names_by_hypothesis("uncategorized"), [])
+        self.assertEqual(market_hypothesis_label("trend_following"), "趋势跟随")
+        self.assertEqual(market_hypothesis_label("unknown"), "未分类")
+
+        combined = {name for names in grouped.values() for name in names}
+        self.assertEqual(len(combined), 20)
+        self.assertEqual(combined, set(list_strategy_names()))
 
     def test_single_strategies_generate_signal(self):
         specs = resolve_strategy_specs()
