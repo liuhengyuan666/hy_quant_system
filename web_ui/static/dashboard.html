@@ -121,7 +121,7 @@
     }
 
     .grid-panels {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .card,
@@ -238,12 +238,6 @@
       background: rgba(255, 255, 255, 0.03);
     }
 
-    @media (max-width: 1280px) {
-      .grid-panels {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-    }
-
     @media (max-width: 980px) {
       .grid-panels {
         grid-template-columns: 1fr;
@@ -309,6 +303,10 @@
         <div class="table-wrap" id="actionFocusTable"></div>
       </article>
       <article class="panel">
+        <div class="panel-head"><h2>Hypothesis Focus｜分组共识</h2><span id="hypothesisFocusCount" class="small"></span></div>
+        <div class="table-wrap" id="hypothesisFocusTable"></div>
+      </article>
+      <article class="panel">
         <div class="panel-head"><h2>Push Candidates｜变化推送</h2><span id="pushCount" class="small"></span></div>
         <div class="table-wrap" id="pushTable"></div>
       </article>
@@ -348,6 +346,9 @@
       signal: "信号 / Signal",
       score: "分值 / Score",
       alignment: "方向一致性 / Alignment",
+      hypothesis_consensus_action: "分组共识 / Hypothesis Consensus",
+      hypothesis_summary_text: "共识摘要 / Hypothesis Summary",
+      hypothesis_tiebreak_applied: "是否改判 / Tiebreak Applied",
       current_level: "当前点数 / Current Level",
       current_price: "当前价格 / Current Price",
       change_value: "涨跌点/额 / Change",
@@ -371,6 +372,8 @@
       REJECT: "拒绝 / REJECT",
       INSUFFICIENT_DATA: "数据不足 / INSUFFICIENT_DATA",
       NO_DATA: "无数据 / NO_DATA",
+      true: "是 / TRUE",
+      false: "否 / FALSE",
       UPTREND: "上升趋势 / UPTREND",
       DOWNTREND: "下降趋势 / DOWNTREND",
       NEW_ENTRY: "新入选 / NEW_ENTRY",
@@ -442,6 +445,7 @@
         ["Active Intraday｜活跃盘中", metrics.active_intraday_count],
         ["Priority Actions｜优先动作", metrics.priority_action_count],
         ["Preclose Rows｜收盘前报告", metrics.preclose_rows],
+        ["Hypothesis Focus｜分组共识", metrics.hypothesis_focus_rows],
       ];
       metricCards.innerHTML = cards.map(([label, value]) => `
         <div class="card">
@@ -514,6 +518,7 @@
       generatedAt.textContent = `快照时间：${snapshot.generated_at || "-"}`;
       providerStatus.textContent = `大陆实时源 / Mainland: ${provider.mainland_provider || "-"} ｜ 补充源 / Fallback: ${provider.fallback_provider || "-"} ｜ 港股源 / HK Provider: ${provider.hk_provider || "-"} ｜ 港股状态 / HK Status: ${provider.hk_status || "-"} ｜ 行情模式 / Quote Mode: ${provider.quote_status || "-"} ｜ 分钟频率 / Bar: ${provider.quote_bar_frequency || "-"}`;
       document.getElementById("actionFocusCount").textContent = `${(snapshot.tables.action_focus || []).length} 行 / rows`;
+      document.getElementById("hypothesisFocusCount").textContent = `${(snapshot.tables.hypothesis_focus || []).length} 行 / rows`;
       document.getElementById("pushCount").textContent = `${(snapshot.tables.push_candidates || []).length} 行 / rows`;
       document.getElementById("intradayCount").textContent = `${(snapshot.tables.latest_intraday || []).length} 行 / rows`;
       document.getElementById("summaryCount").textContent = `${(snapshot.tables.summary || []).length} 行 / rows`;
@@ -525,6 +530,7 @@
       renderQuoteBoards("index", snapshot.tables.index_quote_gainers || [], snapshot.tables.index_quote_losers || [], snapshot.tables.index_quote_flat || [], "current_level");
       renderQuoteBoards("etf", snapshot.tables.etf_quote_gainers || [], snapshot.tables.etf_quote_losers || [], snapshot.tables.etf_quote_flat || [], "current_price");
       renderTable("actionFocusTable", snapshot.tables.action_focus, ["conviction_rank", "symbol", "name", "dashboard_action", "intraday", "eod_bias", "composite_score"]);
+      renderTable("hypothesisFocusTable", snapshot.tables.hypothesis_focus, ["conviction_rank", "symbol", "name", "overall_action", "hypothesis_consensus_action", "hypothesis_tiebreak_applied", "hypothesis_summary_text"]);
       renderTable("pushTable", snapshot.tables.push_candidates, ["push_rank", "symbol", "name", "dashboard_action", "change_reason", "composite_score", "review_gate"]);
       renderTable("intradayTable", snapshot.tables.latest_intraday, ["ts", "symbol", "strategy", "signal", "score"]);
       renderTable("summaryTable", snapshot.tables.summary, ["conviction_rank", "symbol", "name", "intraday", "dashboard_action", "alignment", "composite_score"]);
