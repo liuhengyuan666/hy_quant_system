@@ -21,9 +21,13 @@ class DashboardAppTests(unittest.TestCase):
             "index_quote_gainers": [{"symbol": "000300", "name": "沪深300", "current_level": 3812.12, "change_value": 46.21, "change_pct": 0.0123}],
             "index_quote_losers": [],
             "index_quote_flat": [],
+            "index_quote_stale": [],
+            "index_quote_missing": [],
             "etf_quote_gainers": [{"symbol": "510300", "name": "沪深300ETF", "current_price": 4.52, "change_value": 0.03, "change_pct": 0.0067}],
             "etf_quote_losers": [],
             "etf_quote_flat": [],
+            "etf_quote_stale": [],
+            "etf_quote_missing": [],
         }
         with tempfile.TemporaryDirectory() as temp_dir, patch(
             "web_ui.dashboard_service._build_market_overview_tables",
@@ -58,7 +62,12 @@ class DashboardAppTests(unittest.TestCase):
         self.assertEqual(html.status_code, 200)
         self.assertIn("盘中监控仪表盘", html.text)
         self.assertIn("Index Pool｜指数池行情", html.text)
+        self.assertEqual(html.text.count('class="panel full-row"'), 7)
         self.assertIn("Hypothesis Focus｜分组共识", html.text)
+        self.assertIn("旧快照", html.text)
+        self.assertIn("无数据", html.text)
+        self.assertIn('["ts", "symbol", "name", "strategy", "signal", "score"]', html.text)
+        self.assertIn("const QUOTE_COLUMN_LABELS", html.text)
         self.assertIn("Top Gainers｜涨幅榜", html.text)
         self.assertIn("Top Losers｜跌幅榜", html.text)
         self.assertIn("涨跌点/额 / Change", html.text)

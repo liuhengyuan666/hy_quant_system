@@ -124,6 +124,10 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
+    .panel.full-row {
+      grid-column: 1 / -1;
+    }
+
     .card,
     .panel {
       padding: 18px;
@@ -270,7 +274,7 @@
     </section>
 
     <section class="grid-panels">
-      <article class="panel">
+      <article class="panel full-row">
         <div class="panel-head"><h2>Index Pool｜指数池行情</h2><span id="indexQuoteCount" class="small"></span></div>
         <div class="quote-split">
           <section class="quote-board">
@@ -284,7 +288,7 @@
         </div>
         <div id="indexQuoteFlatNote" class="small quote-note"></div>
       </article>
-      <article class="panel">
+      <article class="panel full-row">
         <div class="panel-head"><h2>ETF Pool｜ETF 行情</h2><span id="etfQuoteCount" class="small"></span></div>
         <div class="quote-split">
           <section class="quote-board">
@@ -298,23 +302,23 @@
         </div>
         <div id="etfQuoteFlatNote" class="small quote-note"></div>
       </article>
-      <article class="panel">
+      <article class="panel full-row">
         <div class="panel-head"><h2>Action Focus｜重点动作</h2><span id="actionFocusCount" class="small"></span></div>
         <div class="table-wrap" id="actionFocusTable"></div>
       </article>
-      <article class="panel">
+      <article class="panel full-row">
         <div class="panel-head"><h2>Hypothesis Focus｜分组共识</h2><span id="hypothesisFocusCount" class="small"></span></div>
         <div class="table-wrap" id="hypothesisFocusTable"></div>
       </article>
-      <article class="panel">
+      <article class="panel full-row">
         <div class="panel-head"><h2>Push Candidates｜变化推送</h2><span id="pushCount" class="small"></span></div>
         <div class="table-wrap" id="pushTable"></div>
       </article>
-      <article class="panel">
+      <article class="panel full-row">
         <div class="panel-head"><h2>Latest Intraday Signals｜最新盘中信号</h2><span id="intradayCount" class="small"></span></div>
         <div class="table-wrap" id="intradayTable"></div>
       </article>
-      <article class="panel">
+      <article class="panel full-row">
         <div class="panel-head"><h2>Latest Summary｜最新汇总</h2><span id="summaryCount" class="small"></span></div>
         <div class="table-wrap" id="summaryTable"></div>
       </article>
@@ -358,6 +362,18 @@
       updated_at: "更新时间 / Updated At"
     };
 
+    const QUOTE_COLUMN_LABELS = {
+      symbol: "代码",
+      name: "名称",
+      current_level: "当前点数",
+      current_price: "当前价格",
+      prev_close: "昨收",
+      change_value: "涨跌点/额",
+      change_pct: "涨跌幅",
+      quote_source: "数据来源",
+      updated_at: "更新时间"
+    };
+
     const VALUE_LABELS = {
       BUY: "买入 / BUY",
       SELL: "卖出 / SELL",
@@ -398,8 +414,8 @@
       return "flat";
     }
 
-    function labelOf(column) {
-      return COLUMN_LABELS[column] || column;
+    function labelOf(column, labels = COLUMN_LABELS) {
+      return labels[column] || column;
     }
 
     function translateValue(value) {
@@ -455,29 +471,29 @@
       `).join("");
     }
 
-    function quoteCountText(gainers, losers, flat) {
-      const total = (gainers?.length || 0) + (losers?.length || 0) + (flat?.length || 0);
-      return `总数 ${total} ｜ 涨 ${gainers?.length || 0} ｜ 跌 ${losers?.length || 0} ｜ 平/无数据 ${flat?.length || 0}`;
+    function quoteCountText(gainers, losers, flat, stale, missing) {
+      const total = (gainers?.length || 0) + (losers?.length || 0) + (flat?.length || 0) + (stale?.length || 0) + (missing?.length || 0);
+      return `总数 ${total} ｜ 涨 ${gainers?.length || 0} ｜ 跌 ${losers?.length || 0} ｜ 平 ${flat?.length || 0} ｜ 旧 ${stale?.length || 0} ｜ 缺 ${missing?.length || 0}`;
     }
 
-    function summarizeFlatRows(rows) {
+    function summarizeNames(title, rows) {
       if (!rows || rows.length === 0) {
-        return "平盘/无数据：无";
+        return `${title}：无`;
       }
       const names = rows.slice(0, 6).map((row) => row.name || row.symbol || "-");
       const remaining = rows.length - names.length;
       const suffix = remaining > 0 ? ` 等 ${remaining} 个` : "";
-      return `平盘/无数据：${names.join("、")}${suffix}`;
+      return `${title}：${names.join("、")}${suffix}`;
     }
 
-    function renderTable(containerId, rows, preferredColumns) {
+    function renderTable(containerId, rows, preferredColumns, labels = COLUMN_LABELS) {
       const container = document.getElementById(containerId);
       if (!rows || rows.length === 0) {
         container.innerHTML = `<div class="small" style="padding:16px;">暂无数据</div>`;
         return;
       }
       const columns = preferredColumns.filter((column) => rows.some((row) => Object.prototype.hasOwnProperty.call(row, column)));
-      const header = columns.map((column) => `<th>${labelOf(column)}</th>`).join("");
+      const header = columns.map((column) => `<th>${labelOf(column, labels)}</th>`).join("");
       const body = rows.map((row) => {
         const cells = columns.map((column) => {
           const value = row[column];
@@ -503,14 +519,19 @@
       container.innerHTML = `<table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>`;
     }
 
-    function renderQuoteBoards(prefix, gainers, losers, flat, currentColumn) {
+    function renderQuoteBoards(prefix, gainers, losers, flat, stale, missing, currentColumn) {
       const columns = ["symbol", "name", currentColumn, "prev_close", "change_value", "change_pct"];
-      renderTable(`${prefix}QuoteGainersTable`, gainers, columns);
-      renderTable(`${prefix}QuoteLosersTable`, losers, columns);
-      document.getElementById(`${prefix}QuoteCount`).textContent = quoteCountText(gainers, losers, flat);
+      renderTable(`${prefix}QuoteGainersTable`, gainers, columns, QUOTE_COLUMN_LABELS);
+      renderTable(`${prefix}QuoteLosersTable`, losers, columns, QUOTE_COLUMN_LABELS);
+      document.getElementById(`${prefix}QuoteCount`).textContent = quoteCountText(gainers, losers, flat, stale, missing);
       document.getElementById(`${prefix}GainersCount`).textContent = `${(gainers || []).length} 行 / rows`;
       document.getElementById(`${prefix}LosersCount`).textContent = `${(losers || []).length} 行 / rows`;
-      document.getElementById(`${prefix}QuoteFlatNote`).textContent = summarizeFlatRows(flat || []);
+      const notes = [
+        summarizeNames("平盘", flat || []),
+        summarizeNames("旧快照", stale || []),
+        summarizeNames("无数据", missing || []),
+      ];
+      document.getElementById(`${prefix}QuoteFlatNote`).textContent = notes.filter((note) => !note.endsWith("：无") || notes.every((item) => item.endsWith("：无"))).join(" ｜ ");
     }
 
     function renderStatus(snapshot) {
@@ -527,17 +548,17 @@
     function renderSnapshot(snapshot) {
       renderMetrics(snapshot.metrics || {});
       renderStatus(snapshot);
-      renderQuoteBoards("index", snapshot.tables.index_quote_gainers || [], snapshot.tables.index_quote_losers || [], snapshot.tables.index_quote_flat || [], "current_level");
-      renderQuoteBoards("etf", snapshot.tables.etf_quote_gainers || [], snapshot.tables.etf_quote_losers || [], snapshot.tables.etf_quote_flat || [], "current_price");
+      renderQuoteBoards("index", snapshot.tables.index_quote_gainers || [], snapshot.tables.index_quote_losers || [], snapshot.tables.index_quote_flat || [], snapshot.tables.index_quote_stale || [], snapshot.tables.index_quote_missing || [], "current_level");
+      renderQuoteBoards("etf", snapshot.tables.etf_quote_gainers || [], snapshot.tables.etf_quote_losers || [], snapshot.tables.etf_quote_flat || [], snapshot.tables.etf_quote_stale || [], snapshot.tables.etf_quote_missing || [], "current_price");
       renderTable("actionFocusTable", snapshot.tables.action_focus, ["conviction_rank", "symbol", "name", "dashboard_action", "intraday", "eod_bias", "composite_score"]);
       renderTable("hypothesisFocusTable", snapshot.tables.hypothesis_focus, ["conviction_rank", "symbol", "name", "overall_action", "hypothesis_consensus_action", "hypothesis_tiebreak_applied", "hypothesis_summary_text"]);
       renderTable("pushTable", snapshot.tables.push_candidates, ["push_rank", "symbol", "name", "dashboard_action", "change_reason", "composite_score", "review_gate"]);
-      renderTable("intradayTable", snapshot.tables.latest_intraday, ["ts", "symbol", "strategy", "signal", "score"]);
+      renderTable("intradayTable", snapshot.tables.latest_intraday, ["ts", "symbol", "name", "strategy", "signal", "score"]);
       renderTable("summaryTable", snapshot.tables.summary, ["conviction_rank", "symbol", "name", "intraday", "dashboard_action", "alignment", "composite_score"]);
     }
 
     async function loadSnapshot() {
-      const response = await fetch("/api/dashboard");
+      const response = await fetch("/api/dashboard", { cache: "no-store" });
       const data = await response.json();
       renderSnapshot(data);
     }
@@ -546,7 +567,7 @@
       refreshButton.disabled = true;
       refreshButton.textContent = "刷新中…";
       try {
-        const response = await fetch("/api/dashboard/refresh", { method: "POST" });
+        const response = await fetch("/api/dashboard/refresh", { method: "POST", cache: "no-store" });
         const data = await response.json();
         renderSnapshot(data);
       } catch (error) {
