@@ -19,6 +19,12 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.hk_realtime_futu_host, "127.0.0.1")
         self.assertEqual(config.hk_realtime_futu_port, 11111)
         self.assertEqual(config.hk_realtime_futu_symbol_map, {})
+        self.assertEqual(config.hypothesis_weights, {})
+        self.assertEqual(config.hypothesis_conflict_min_score, 0.18)
+        self.assertEqual(config.hypothesis_conflict_min_confidence, 0.55)
+        self.assertEqual(config.hypothesis_hold_min_score, 0.28)
+        self.assertEqual(config.hypothesis_hold_min_confidence, 0.60)
+        self.assertEqual(config.hypothesis_tiebreak_min_groups, 2)
 
     def test_reads_custom_values(self):
         content = """
@@ -40,6 +46,18 @@ enabled = false
 trigger_time = "14:40"
 decision_time = "14:50"
 output_dir = "reports/custom-preclose"
+
+[runtime.hypothesis.weights]
+trend_following = 1.4
+mean_reversion = 0.8
+cross_asset_allocation = 1.3
+
+[runtime.hypothesis.tiebreak]
+conflict_min_score = 0.22
+conflict_min_confidence = 0.61
+hold_min_score = 0.35
+hold_min_confidence = 0.72
+min_groups = 3
 
 [runtime.hk_realtime]
 provider = "futu"
@@ -67,3 +85,9 @@ HSCEI = "HK.CUSTOM2"
         self.assertEqual(config.hk_realtime_futu_port, 21111)
         self.assertTrue(config.hk_realtime_futu_is_encrypt)
         self.assertEqual(config.hk_realtime_futu_symbol_map, {"HSTECH": "HK.CUSTOM1", "HSCEI": "HK.CUSTOM2"})
+        self.assertEqual(config.hypothesis_weights, {"trend_following": 1.4, "mean_reversion": 0.8, "cross_asset_allocation": 1.3})
+        self.assertEqual(config.hypothesis_conflict_min_score, 0.22)
+        self.assertEqual(config.hypothesis_conflict_min_confidence, 0.61)
+        self.assertEqual(config.hypothesis_hold_min_score, 0.35)
+        self.assertEqual(config.hypothesis_hold_min_confidence, 0.72)
+        self.assertEqual(config.hypothesis_tiebreak_min_groups, 3)

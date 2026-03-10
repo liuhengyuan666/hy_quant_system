@@ -14,6 +14,7 @@
 - `strategy_engine/`：策略协议、20 个策略实现、策略注册表。
 - `signal_service/`：`EOD`/盘中信号、二次验证、汇总看板、收盘前决策、日报、数据缺口、策略矩阵导出。
 - `scheduler/`：收盘批处理、`run-eod-analyze`、盘中循环执行器。
+- `web_ui/`：FastAPI dashboard；拼装前端快照、行情面板、分组共识面板与刷新接口。
 - `backtest_engine/`：Backtrader 适配与 HTML 报告。
 - `tests/`：以 `unittest` 为主，覆盖策略、导出、调度、时间语义与兼容行为。
 - `reports/`：导出产物目录；包含 `summary`、`preclose`、`daily_conclusion`、`data_gaps`、`strategy_matrix`。
@@ -33,6 +34,8 @@
 - 改收盘前决策：`signal_service/preclose_decision.py`
 - 改每日结论 / 数据缺口 / 策略矩阵：`signal_service/daily_conclusion_report.py`、`signal_service/data_gap_report.py`、`signal_service/strategy_matrix_report.py`
 - 改调度编排：`scheduler/jobs.py`、`scheduler/intraday_runner.py`
+- 改 dashboard 接口 / 快照读取：`web_ui/app.py`、`web_ui/dashboard_service.py`
+- 改 dashboard 排版与表格展示：`web_ui/static/dashboard.html`
 - 改回测行为：`backtest_engine/backtest_runner.py`、`backtest_engine/strategy_adapter.py`
 - 改说明文档：`README.md`、`使用说明.md`
 
@@ -43,6 +46,8 @@
 - 收盘前 / 日报 / 策略矩阵 / 数据缺口 报告默认面向完整 `universe`，不是只覆盖当前有信号的标的。
 - CLI 输出保持脚本友好：成功结果打印 JSON 或简洁文本；不要混入大量调试输出。
 - 汇总导出约定：`summary/group/top/push` 四类产物同目录生成，文件名前缀稳定。
+- dashboard 默认混合消费 `summary` / `intraday` / `preclose` / `daily_conclusion`；改任一导出文件名或字段时必须同步核对 `web_ui/dashboard_service.py`。
+- `daily_conclusion` 在显式传入 `intraday_ts` 时允许生成“当天盘中版”；不要再把整份日报的目标日期强制回退到最近已闭市日。
 - 单个 symbol 失败不应拖垮整批任务，但吞错时至少保留可追踪上下文。
 
 ## ANTI-PATTERNS
@@ -53,6 +58,7 @@
 - 不要新增自由格式信号值；核心信号继续使用 `BUY/SELL/HOLD`，动作扩展走受控字段。
 - 不要新增返回字段却不更新对应 CLI、README、说明文档和测试。
 - 不要让报告对缺行情标的泄露旧 summary 残留结论；缺数据时明确标注 `NO_DATA` / 中性动作。
+- 不要让 dashboard 把旧盘中快照伪装成今天实时；需要明确 source / updated_at 语义。
 
 ## COMMANDS
 - 安装依赖：`python -m pip install -r requirements.txt`
@@ -70,6 +76,7 @@
 - 导出每日结论：`python main.py export-daily-conclusion`
 - 导出数据缺口：`python main.py export-data-gaps`
 - 导出策略矩阵：`python main.py export-strategy-matrix`
+- 启动 dashboard：`python main.py run-dashboard --host 127.0.0.1 --port 8000`
 - 启动调度：`python main.py run-scheduler`
 - 运行测试：`python -m unittest discover -s tests -p "test_*.py"`
 

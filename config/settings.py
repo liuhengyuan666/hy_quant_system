@@ -68,6 +68,12 @@ class RuntimeConfig:
     hk_realtime_futu_port: int = 11111
     hk_realtime_futu_is_encrypt: bool = False
     hk_realtime_futu_symbol_map: dict[str, str] | None = None
+    hypothesis_weights: dict[str, float] | None = None
+    hypothesis_conflict_min_score: float = 0.18
+    hypothesis_conflict_min_confidence: float = 0.55
+    hypothesis_hold_min_score: float = 0.28
+    hypothesis_hold_min_confidence: float = 0.60
+    hypothesis_tiebreak_min_groups: int = 2
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -173,6 +179,8 @@ def load_runtime_config(config_path: Path | None = None) -> RuntimeConfig:
     section = raw.get("runtime", {})
     intraday = section.get("intraday", {})
     preclose = section.get("preclose", {})
+    hypothesis = section.get("hypothesis", {})
+    hypothesis_tiebreak = hypothesis.get("tiebreak", {})
     hk_realtime = section.get("hk_realtime", {})
     futu = hk_realtime.get("futu", {})
 
@@ -196,6 +204,13 @@ def load_runtime_config(config_path: Path | None = None) -> RuntimeConfig:
         if str(symbol).strip() and str(code).strip()
     }
 
+    raw_hypothesis_weights = hypothesis.get("weights", {})
+    hypothesis_weights = {
+        str(name).strip(): float(value)
+        for name, value in raw_hypothesis_weights.items()
+        if str(name).strip()
+    }
+
     return RuntimeConfig(
         timezone=str(section.get("timezone", "Asia/Shanghai")),
         intraday_enabled=bool(intraday.get("enabled", True)),
@@ -215,4 +230,10 @@ def load_runtime_config(config_path: Path | None = None) -> RuntimeConfig:
         hk_realtime_futu_port=futu_port,
         hk_realtime_futu_is_encrypt=futu_is_encrypt,
         hk_realtime_futu_symbol_map=hk_symbol_map,
+        hypothesis_weights=hypothesis_weights,
+        hypothesis_conflict_min_score=float(hypothesis_tiebreak.get("conflict_min_score", 0.18)),
+        hypothesis_conflict_min_confidence=float(hypothesis_tiebreak.get("conflict_min_confidence", 0.55)),
+        hypothesis_hold_min_score=float(hypothesis_tiebreak.get("hold_min_score", 0.28)),
+        hypothesis_hold_min_confidence=float(hypothesis_tiebreak.get("hold_min_confidence", 0.60)),
+        hypothesis_tiebreak_min_groups=max(1, int(hypothesis_tiebreak.get("min_groups", 2))),
     )

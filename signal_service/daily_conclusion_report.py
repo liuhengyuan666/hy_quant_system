@@ -8,17 +8,17 @@ from typing import Any, Literal, cast
 
 import pandas as pd
 
-from config.settings import PostgresConfig, load_universe_config
+from config.settings import PostgresConfig, RuntimeConfig, load_runtime_config, load_universe_config
 from core.clock import now_shanghai
 from core.trading_calendar import latest_closed_trading_date
 from data_storage.database import session_scope
-from data_storage.realtime_repository import load_intraday_signals, load_latest_intraday_signal_ts
+from data_storage.realtime_repository import load_intraday_signals, load_latest_intraday_signal_ts, load_realtime_bars_map
 from data_storage.repository import load_latest_signal_date, load_latest_signal_date_on_or_before, load_market_prices_map, load_signals_by_date
 from signal_service.preclose_decision import build_preclose_decisions
 from signal_service.secondary_validation import build_secondary_validation
 from signal_service.summary_view import build_signal_summary
 from signal_service.symbol_meta import enrich_signal_frame_with_symbol_names
-from strategy_engine.library import build_strategy_specs
+from strategy_engine.library import MARKET_HYPOTHESIS_ORDER, build_strategy_specs, market_hypothesis_label
 
 ACTION_COLUMNS = ["long_term_action", "short_term_action", "preclose_signal", "overall_action"]
 OPERATION_VIEW_COLUMNS = [
@@ -30,6 +30,8 @@ OPERATION_VIEW_COLUMNS = [
     "bucket",
     "long_term_action",
     "short_term_action",
+    "hypothesis_consensus_action",
+    "hypothesis_summary_text",
     "preclose_signal",
     "overall_action",
     "action_note",
@@ -57,6 +59,13 @@ DAILY_CONCLUSION_COLUMNS = [
     "short_term_hold_count",
     "short_term_sell_count",
     "short_term_supporting_evidence",
+    "hypothesis_consensus_action",
+    "hypothesis_consensus_score",
+    "hypothesis_consensus_confidence",
+    "hypothesis_active_group_count",
+    "hypothesis_consensus_supporting_evidence",
+    "hypothesis_summary_text",
+    "hypothesis_tiebreak_applied",
     "preclose_signal",
     "preclose_score",
     "overall_action",
@@ -64,9 +73,41 @@ DAILY_CONCLUSION_COLUMNS = [
     "eod_bias",
     "alignment",
 ]
-EVIDENCE_COLUMNS = ["symbol", "name", "horizon", "source", "strategy", "signal", "weight", "weighted_score"]
+EVIDENCE_COLUMNS = [
+    "symbol",
+    "name",
+    "horizon",
+    "market_hypothesis",
+    "market_hypothesis_label",
+    "source",
+    "strategy",
+    "signal",
+    "weight",
+    "weighted_score",
+]
+HYPOTHESIS_SUMMARY_COLUMNS = [
+    "conviction_rank",
+    "symbol",
+    "display_symbol",
+    "name",
+    "asset_type",
+    "bucket",
+    "horizon",
+    "market_hypothesis",
+    "market_hypothesis_label",
+    "hypothesis_action",
+    "hypothesis_score",
+    "hypothesis_confidence",
+    "hypothesis_strategy_count",
+    "hypothesis_buy_count",
+    "hypothesis_hold_count",
+    "hypothesis_sell_count",
+    "hypothesis_supporting_evidence",
+]
 DATA_GAP_COLUMNS = ["symbol", "display_symbol", "name", "asset_type", "bucket", "issue_type", "reason"]
 ASSET_TYPE_ORDER = {"INDEX": 0, "ETF": 1}
+HORIZON_ORDER = {"long_term": 0, "short_term": 1}
+HYPOTHESIS_ORDER = {value: index for index, value in enumerate(MARKET_HYPOTHESIS_ORDER)}
 DATA_STATUS_ORDER = {"OK": 0, "PARTIAL": 1, "NO_DATA": 2}
 ACTION_PRIORITY_ORDER = {
     "ALIGNED_ACTION": 0,
@@ -115,6 +156,31 @@ def _signal_score(signal: str) -> float:
     if signal == "SELL":
         return -1.0
     return 0.0
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    text = str(value).strip()
+    if text == "" or text.lower() in {"nan", "nat", "none", "<na>"}:
+        return default
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    text = str(value).strip()
+    if text == "" or text.lower() in {"nan", "nat", "none", "<na>"}:
+        return default
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return default
+
+
+def _hypothesis_weight(runtime_config: RuntimeConfig, market_hypothesis: str) -> float:
+    weights = runtime_config.hypothesis_weights or {}
+    return _safe_float(weights.get(market_hypothesis), default=1.0)
 
 
 def _classify_asset_type(display_symbol: object) -> str:
@@ -356,6 +422,8 @@ def _build_strategy_evidence(
                     "symbol": str(row.get("symbol", "")),
                     "strategy": strategy_name,
                     "horizon": spec.horizon,
+                    "market_hypothesis": spec.market_hypothesis,
+                    "market_hypothesis_label": market_hypothesis_label(spec.market_hypothesis),
                     "source": source,
                     "signal": signal,
                     "weight": weight,
@@ -388,30 +456,22 @@ def _supporting_evidence_text(frame: pd.DataFrame, action: str) -> str:
     return "mixed_signals"
 
 
-def _aggregate_horizon(symbol: str, horizon: str, evidence: pd.DataFrame, no_data_symbols: set[str]) -> dict[str, object]:
-    prefix = f"{horizon}_"
-    if symbol in no_data_symbols:
-        return {
-            f"{prefix}action": "NO_DATA",
-            f"{prefix}score": None,
-            f"{prefix}confidence": None,
-            f"{prefix}buy_count": 0,
-            f"{prefix}hold_count": 0,
-            f"{prefix}sell_count": 0,
-            f"{prefix}supporting_evidence": "no_market_data",
-        }
+def _empty_aggregate(prefix: str, action: str, reason: str) -> dict[str, object]:
+    return {
+        f"{prefix}_action": action,
+        f"{prefix}_score": None,
+        f"{prefix}_confidence": None,
+        f"{prefix}_strategy_count": 0,
+        f"{prefix}_buy_count": 0,
+        f"{prefix}_hold_count": 0,
+        f"{prefix}_sell_count": 0,
+        f"{prefix}_supporting_evidence": reason,
+    }
 
-    scoped = evidence[(evidence["symbol"] == symbol) & (evidence["horizon"] == horizon)].copy()
+
+def _aggregate_scoped_evidence(scoped: pd.DataFrame, prefix: str) -> dict[str, object]:
     if scoped.empty:
-        return {
-            f"{prefix}action": "MISSING",
-            f"{prefix}score": None,
-            f"{prefix}confidence": None,
-            f"{prefix}buy_count": 0,
-            f"{prefix}hold_count": 0,
-            f"{prefix}sell_count": 0,
-            f"{prefix}supporting_evidence": "missing_strategy_signals",
-        }
+        return _empty_aggregate(prefix, action="MISSING", reason="missing_strategy_signals")
 
     buy_count = int((scoped["signal"] == "BUY").sum())
     hold_count = int((scoped["signal"] == "HOLD").sum())
@@ -421,14 +481,11 @@ def _aggregate_horizon(symbol: str, horizon: str, evidence: pd.DataFrame, no_dat
     sell_weight = float(scoped.loc[scoped["signal"] == "SELL", "weight"].sum())
     total_weight = buy_weight + hold_weight + sell_weight
     if total_weight <= 0:
-        return {
-            f"{prefix}action": "MISSING",
-            f"{prefix}score": None,
-            f"{prefix}confidence": None,
-            f"{prefix}buy_count": buy_count,
-            f"{prefix}hold_count": hold_count,
-            f"{prefix}sell_count": sell_count,
-            f"{prefix}supporting_evidence": "missing_strategy_signals",
+        return _empty_aggregate(prefix, action="MISSING", reason="missing_strategy_signals") | {
+            f"{prefix}_strategy_count": int(scoped["strategy"].nunique()),
+            f"{prefix}_buy_count": buy_count,
+            f"{prefix}_hold_count": hold_count,
+            f"{prefix}_sell_count": sell_count,
         }
 
     net_score = float((buy_weight - sell_weight) / total_weight)
@@ -442,14 +499,221 @@ def _aggregate_horizon(symbol: str, horizon: str, evidence: pd.DataFrame, no_dat
         action = "HOLD"
 
     return {
-        f"{prefix}action": action,
-        f"{prefix}score": round(net_score, 4),
-        f"{prefix}confidence": round(confidence, 4),
-        f"{prefix}buy_count": buy_count,
-        f"{prefix}hold_count": hold_count,
-        f"{prefix}sell_count": sell_count,
-        f"{prefix}supporting_evidence": _supporting_evidence_text(scoped, action),
+        f"{prefix}_action": action,
+        f"{prefix}_score": round(net_score, 4),
+        f"{prefix}_confidence": round(confidence, 4),
+        f"{prefix}_strategy_count": int(scoped["strategy"].nunique()),
+        f"{prefix}_buy_count": buy_count,
+        f"{prefix}_hold_count": hold_count,
+        f"{prefix}_sell_count": sell_count,
+        f"{prefix}_supporting_evidence": _supporting_evidence_text(scoped, action),
     }
+
+
+def _aggregate_horizon(symbol: str, horizon: str, evidence: pd.DataFrame, no_data_symbols: set[str]) -> dict[str, object]:
+    prefix = f"{horizon}_"
+    if symbol in no_data_symbols:
+        return _empty_aggregate(prefix.rstrip("_"), action="NO_DATA", reason="no_market_data")
+
+    scoped = evidence[(evidence["symbol"] == symbol) & (evidence["horizon"] == horizon)].copy()
+    aggregate = _aggregate_scoped_evidence(scoped, prefix.rstrip("_"))
+    return {
+        f"{prefix}action": aggregate[f"{prefix.rstrip('_')}_action"],
+        f"{prefix}score": aggregate[f"{prefix.rstrip('_')}_score"],
+        f"{prefix}confidence": aggregate[f"{prefix.rstrip('_')}_confidence"],
+        f"{prefix}buy_count": aggregate[f"{prefix.rstrip('_')}_buy_count"],
+        f"{prefix}hold_count": aggregate[f"{prefix.rstrip('_')}_hold_count"],
+        f"{prefix}sell_count": aggregate[f"{prefix.rstrip('_')}_sell_count"],
+        f"{prefix}supporting_evidence": aggregate[f"{prefix.rstrip('_')}_supporting_evidence"],
+    }
+
+
+def _sort_hypothesis_summary(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or "symbol" not in frame.columns:
+        return frame.copy()
+
+    table = frame.copy()
+    table["_asset_type_order"] = table["asset_type"].astype(str).map(ASSET_TYPE_ORDER).fillna(99)
+    table["_bucket_order"] = table["bucket"].fillna("未分组").astype(str)
+    table["_rank_order"] = pd.to_numeric(table["conviction_rank"], errors="coerce").fillna(999999)
+    table["_horizon_order"] = table["horizon"].astype(str).map(HORIZON_ORDER).fillna(99)
+    table["_hypothesis_order"] = table["market_hypothesis"].astype(str).map(HYPOTHESIS_ORDER).fillna(99)
+    table["_symbol_order"] = table["symbol"].astype(str)
+    ordered = table.sort_values(
+        ["_asset_type_order", "_bucket_order", "_rank_order", "_horizon_order", "_hypothesis_order", "_symbol_order"],
+        ascending=[True, True, True, True, True, True],
+    ).reset_index(drop=True)
+    return ordered.drop(columns=["_asset_type_order", "_bucket_order", "_rank_order", "_horizon_order", "_hypothesis_order", "_symbol_order"])
+
+
+def build_hypothesis_summary_frame(
+    summary: pd.DataFrame,
+    long_term_evidence: pd.DataFrame,
+    short_term_evidence: pd.DataFrame,
+    market_data_by_symbol: dict[str, pd.DataFrame] | None = None,
+) -> pd.DataFrame:
+    if summary.empty:
+        return pd.DataFrame(columns=HYPOTHESIS_SUMMARY_COLUMNS)
+
+    evidence = pd.concat([long_term_evidence, short_term_evidence], ignore_index=True)
+    if evidence.empty:
+        return pd.DataFrame(columns=HYPOTHESIS_SUMMARY_COLUMNS)
+
+    base_rows = summary[["conviction_rank", "symbol", "display_symbol", "name", "asset_type", "bucket"]].copy()
+    base_rows["symbol"] = base_rows["symbol"].astype(str)
+    no_data_symbols = {symbol for symbol, frame in (market_data_by_symbol or {}).items() if frame.empty}
+    rows: list[dict[str, object]] = []
+    for (symbol, horizon, market_hypothesis), scoped in evidence.groupby(["symbol", "horizon", "market_hypothesis"], dropna=False):
+        meta_match = base_rows[base_rows["symbol"] == str(symbol)]
+        if meta_match.empty:
+            continue
+        meta = meta_match.iloc[0]
+        aggregate = (
+            _empty_aggregate("hypothesis", action="NO_DATA", reason="no_market_data")
+            if str(symbol) in no_data_symbols
+            else _aggregate_scoped_evidence(scoped.copy(), "hypothesis")
+        )
+        rows.append(
+            {
+                "conviction_rank": meta.get("conviction_rank"),
+                "symbol": str(symbol),
+                "display_symbol": meta.get("display_symbol"),
+                "name": meta.get("name"),
+                "asset_type": meta.get("asset_type"),
+                "bucket": meta.get("bucket"),
+                "horizon": str(horizon),
+                "market_hypothesis": str(market_hypothesis),
+                "market_hypothesis_label": market_hypothesis_label(str(market_hypothesis)),
+                **aggregate,
+            }
+        )
+
+    hypothesis_summary = pd.DataFrame(rows)
+    if hypothesis_summary.empty:
+        return pd.DataFrame(columns=HYPOTHESIS_SUMMARY_COLUMNS)
+    for column in HYPOTHESIS_SUMMARY_COLUMNS:
+        if column not in hypothesis_summary.columns:
+            hypothesis_summary[column] = pd.Series(dtype="string")
+    return _sort_hypothesis_summary(hypothesis_summary[HYPOTHESIS_SUMMARY_COLUMNS])
+
+
+def _hypothesis_supporting_text(frame: pd.DataFrame, action: str) -> str:
+    if frame.empty or action not in {"BUY", "SELL"}:
+        return "mixed_hypothesis_signals"
+
+    matched = frame[frame["hypothesis_action"].astype(str) == action].copy()
+    if matched.empty:
+        return "mixed_hypothesis_signals"
+
+    matched["strength"] = pd.to_numeric(matched["hypothesis_score"], errors="coerce").abs().fillna(0.0) * pd.to_numeric(
+        matched["hypothesis_confidence"], errors="coerce"
+    ).fillna(0.0)
+    matched = matched.sort_values(["strength", "horizon", "market_hypothesis"], ascending=[False, True, True])
+    labels: list[str] = []
+    seen: set[str] = set()
+    for _, row in matched.iterrows():
+        label = f"{row['market_hypothesis_label']}@{row['horizon']}"
+        if label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+    return " | ".join(labels[:6]) if labels else "mixed_hypothesis_signals"
+
+
+def _build_hypothesis_consensus_lookup(hypothesis_summary: pd.DataFrame, runtime_config: RuntimeConfig) -> dict[str, dict[str, object]]:
+    if hypothesis_summary.empty or "symbol" not in hypothesis_summary.columns:
+        return {}
+
+    lookup: dict[str, dict[str, object]] = {}
+    for symbol, subset in hypothesis_summary.groupby("symbol", dropna=False):
+        table = subset.copy()
+        scores = pd.to_numeric(table["hypothesis_score"], errors="coerce").fillna(0.0)
+        confidences = pd.to_numeric(table["hypothesis_confidence"], errors="coerce").fillna(0.0)
+        actions = table["hypothesis_action"].astype(str)
+        hypothesis_weights = table["market_hypothesis"].astype(str).map(lambda name: _hypothesis_weight(runtime_config, name))
+        strengths = scores.abs() * confidences * hypothesis_weights
+        buy_strength = float(strengths[actions == "BUY"].sum())
+        sell_strength = float(strengths[actions == "SELL"].sum())
+        hold_strength = float((confidences * hypothesis_weights)[actions == "HOLD"].sum())
+        active_group_count = int(
+            table.loc[actions.isin(["BUY", "SELL"]), "market_hypothesis"].astype(str).nunique()
+        )
+        total_strength = buy_strength + sell_strength + hold_strength
+        if total_strength <= 0:
+            lookup[str(symbol)] = {
+                "hypothesis_consensus_action": "HOLD",
+                "hypothesis_consensus_score": 0.0,
+                "hypothesis_consensus_confidence": 0.0,
+                "hypothesis_active_group_count": active_group_count,
+                "hypothesis_consensus_supporting_evidence": "mixed_hypothesis_signals",
+            }
+            continue
+
+        net_score = float((buy_strength - sell_strength) / total_strength)
+        dominant_strength = max(buy_strength, sell_strength, hold_strength)
+        confidence = float(dominant_strength / total_strength)
+        if buy_strength > sell_strength and net_score >= 0.15:
+            action = "BUY"
+        elif sell_strength > buy_strength and net_score <= -0.15:
+            action = "SELL"
+        else:
+            action = "HOLD"
+        lookup[str(symbol)] = {
+            "hypothesis_consensus_action": action,
+            "hypothesis_consensus_score": round(net_score, 4),
+            "hypothesis_consensus_confidence": round(confidence, 4),
+            "hypothesis_active_group_count": active_group_count,
+            "hypothesis_consensus_supporting_evidence": _hypothesis_supporting_text(table, action),
+        }
+    return lookup
+
+
+def _resolve_overall_action_with_hypothesis(
+    long_term_action: str,
+    short_term_action: str,
+    data_status: str,
+    hypothesis_consensus: dict[str, object],
+    runtime_config: RuntimeConfig,
+) -> tuple[str, bool]:
+    base_action = _overall_action(long_term_action, short_term_action, data_status)
+    if data_status != "OK":
+        return base_action, False
+
+    consensus_action = str(hypothesis_consensus.get("hypothesis_consensus_action", "HOLD"))
+    if consensus_action not in {"BUY", "SELL"}:
+        return base_action, False
+
+    score = _safe_float(hypothesis_consensus.get("hypothesis_consensus_score"), default=0.0)
+    confidence = _safe_float(hypothesis_consensus.get("hypothesis_consensus_confidence"), default=0.0)
+    active_group_count = _safe_int(hypothesis_consensus.get("hypothesis_active_group_count"), default=0)
+    if score is None or confidence is None or active_group_count < runtime_config.hypothesis_tiebreak_min_groups:
+        return base_action, False
+
+    numeric_score = abs(score)
+    numeric_confidence = confidence
+    if {long_term_action, short_term_action} == {"BUY", "SELL"}:
+        if numeric_score >= runtime_config.hypothesis_conflict_min_score and numeric_confidence >= runtime_config.hypothesis_conflict_min_confidence:
+            return consensus_action, True
+        return base_action, False
+
+    if long_term_action == short_term_action == "HOLD":
+        if numeric_score >= runtime_config.hypothesis_hold_min_score and numeric_confidence >= runtime_config.hypothesis_hold_min_confidence:
+            return consensus_action, True
+    return base_action, False
+
+
+def _hypothesis_summary_text(row: dict[str, object]) -> str:
+    consensus_action = str(row.get("hypothesis_consensus_action", "HOLD"))
+    tiebreak_applied = bool(row.get("hypothesis_tiebreak_applied", False))
+    active_group_count = _safe_int(row.get("hypothesis_active_group_count"), default=0)
+    support = str(row.get("hypothesis_consensus_supporting_evidence", "mixed_hypothesis_signals"))
+    if consensus_action in {"BUY", "SELL"}:
+        if tiebreak_applied:
+            return f"分组共识改判为 {consensus_action}（{active_group_count} 组；{support}）"
+        return f"分组共识偏向 {consensus_action}（{active_group_count} 组；{support}）"
+    if active_group_count > 0:
+        return f"分组共识仍观望（{active_group_count} 组活跃；{support}）"
+    return "暂无有效分组共识"
 
 
 def _overall_action(long_term_action: str, short_term_action: str, data_status: str) -> str:
@@ -473,11 +737,17 @@ def _operation_note(row: pd.Series) -> str:
     short_term_action = str(row.get("short_term_action", "HOLD"))
     preclose_signal = str(row.get("preclose_signal", "HOLD"))
     overall_action = str(row.get("overall_action", "HOLD"))
+    hypothesis_consensus_action = str(row.get("hypothesis_consensus_action", "HOLD"))
+    hypothesis_tiebreak_applied = bool(row.get("hypothesis_tiebreak_applied", False))
 
     if data_status == "NO_DATA":
         return "缺少历史行情，暂不判断"
     if data_status == "PARTIAL":
         return "部分策略信号缺失，结论仅供参考"
+    if hypothesis_tiebreak_applied and {long_term_action, short_term_action} == {"BUY", "SELL"}:
+        return f"分组共识偏向 {hypothesis_consensus_action}，用于化解长短线冲突"
+    if hypothesis_tiebreak_applied and long_term_action == short_term_action == "HOLD":
+        return f"长短线均观望，但策略分组共识转为 {hypothesis_consensus_action}"
     if long_term_action == short_term_action == "BUY":
         return "长短线同向看多"
     if long_term_action == short_term_action == "SELL":
@@ -517,7 +787,9 @@ def build_daily_conclusions(
     preclose: pd.DataFrame,
     market_data_by_symbol: dict[str, pd.DataFrame] | None = None,
     fallback_symbols: list[str] | None = None,
+    runtime_config: RuntimeConfig | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    config = runtime_config or load_runtime_config()
     base_symbols = [
         str(symbol)
         for symbol in sorted(
@@ -543,6 +815,16 @@ def build_daily_conclusions(
     else:
         evidence = pd.DataFrame(columns=EVIDENCE_COLUMNS)
 
+    long_term_evidence = evidence[evidence["horizon"] == "long_term"].reset_index(drop=True) if not evidence.empty else pd.DataFrame(columns=EVIDENCE_COLUMNS)
+    short_term_evidence = evidence[evidence["horizon"] == "short_term"].reset_index(drop=True) if not evidence.empty else pd.DataFrame(columns=EVIDENCE_COLUMNS)
+    hypothesis_summary = build_hypothesis_summary_frame(
+        summary=base_rows,
+        long_term_evidence=long_term_evidence,
+        short_term_evidence=short_term_evidence,
+        market_data_by_symbol=market_data_by_symbol,
+    )
+    hypothesis_consensus_lookup = _build_hypothesis_consensus_lookup(hypothesis_summary, runtime_config=config)
+
     no_data_symbols = {symbol for symbol, frame in (market_data_by_symbol or {}).items() if frame.empty}
     preclose_lookup = {}
     if not preclose.empty and "symbol" in preclose.columns:
@@ -560,6 +842,23 @@ def build_daily_conclusions(
         short_term = _aggregate_horizon(symbol, "short_term", evidence, no_data_symbols)
         preclose_info = preclose_lookup.get(symbol, {"preclose_signal": "HOLD", "preclose_score": None})
         data_status = "NO_DATA" if symbol in no_data_symbols else "PARTIAL" if "MISSING" in {str(long_term["long_term_action"]), str(short_term["short_term_action"])} else "OK"
+        hypothesis_consensus = hypothesis_consensus_lookup.get(
+            symbol,
+            {
+                "hypothesis_consensus_action": "HOLD",
+                "hypothesis_consensus_score": 0.0,
+                "hypothesis_consensus_confidence": 0.0,
+                "hypothesis_active_group_count": 0,
+                "hypothesis_consensus_supporting_evidence": "mixed_hypothesis_signals",
+            },
+        )
+        resolved_overall_action, hypothesis_tiebreak_applied = _resolve_overall_action_with_hypothesis(
+            long_term_action=str(long_term["long_term_action"]),
+            short_term_action=str(short_term["short_term_action"]),
+            data_status=data_status,
+            hypothesis_consensus=hypothesis_consensus,
+            runtime_config=config,
+        )
         result_row = {
             "conviction_rank": row.get("conviction_rank"),
             "symbol": symbol,
@@ -570,13 +869,16 @@ def build_daily_conclusions(
             "data_status": data_status,
             **long_term,
             **short_term,
+            **hypothesis_consensus,
+            "hypothesis_tiebreak_applied": hypothesis_tiebreak_applied,
             "preclose_signal": preclose_info.get("preclose_signal"),
             "preclose_score": None if pd.isna(preclose_info.get("preclose_score")) else float(preclose_info.get("preclose_score")),
-            "overall_action": _overall_action(str(long_term["long_term_action"]), str(short_term["short_term_action"]), data_status),
+            "overall_action": resolved_overall_action,
             "dashboard_action": row.get("dashboard_action"),
             "eod_bias": row.get("eod_bias"),
             "alignment": row.get("alignment"),
         }
+        result_row["hypothesis_summary_text"] = _hypothesis_summary_text(result_row)
         rows.append(result_row)
         if data_status != "OK":
             data_gap_rows.append(
@@ -600,8 +902,6 @@ def build_daily_conclusions(
                 conclusion[column] = pd.Series(dtype="string")
         conclusion = _sort_rows(conclusion[DAILY_CONCLUSION_COLUMNS])
 
-    long_term_evidence = evidence[evidence["horizon"] == "long_term"].reset_index(drop=True) if not evidence.empty else pd.DataFrame(columns=EVIDENCE_COLUMNS)
-    short_term_evidence = evidence[evidence["horizon"] == "short_term"].reset_index(drop=True) if not evidence.empty else pd.DataFrame(columns=EVIDENCE_COLUMNS)
     data_gaps = pd.DataFrame(data_gap_rows)
     if data_gaps.empty:
         data_gaps = pd.DataFrame(columns=DATA_GAP_COLUMNS)
@@ -624,6 +924,7 @@ def build_daily_conclusion_frames(
     intraday_ts: datetime | None,
     market_data_by_symbol: dict[str, pd.DataFrame] | None = None,
     fallback_symbols: list[str] | None = None,
+    runtime_config: RuntimeConfig | None = None,
 ) -> dict[str, pd.DataFrame]:
     conclusion, long_term_evidence, short_term_evidence, data_gaps = build_daily_conclusions(
         summary=summary,
@@ -634,6 +935,13 @@ def build_daily_conclusion_frames(
         preclose=preclose,
         market_data_by_symbol=market_data_by_symbol,
         fallback_symbols=fallback_symbols,
+        runtime_config=runtime_config,
+    )
+    hypothesis_summary = build_hypothesis_summary_frame(
+        summary=conclusion,
+        long_term_evidence=long_term_evidence,
+        short_term_evidence=short_term_evidence,
+        market_data_by_symbol=market_data_by_symbol,
     )
     operation_view = build_operation_view(conclusion)
     no_data_count = int((conclusion.get("data_status") == "NO_DATA").sum()) if not conclusion.empty else 0
@@ -653,19 +961,23 @@ def build_daily_conclusion_frames(
             {"section": "legend", "item": "MISSING", "value": "本应存在的策略信号缺失，需检查上游"},
             {"section": "sheet", "item": "Operation_View", "value": "最终操作版视图：更短、更适合日常直接看"},
             {"section": "sheet", "item": "Daily_Conclusion", "value": "长线/短线简明结论主表"},
+            {"section": "sheet", "item": "Hypothesis_Summary", "value": "按策略哲学分组后的聚合结论"},
             {"section": "sheet", "item": "LongTerm_Evidence", "value": "长线证据明细"},
             {"section": "sheet", "item": "ShortTerm_Evidence", "value": "短线证据明细"},
             {"section": "sheet", "item": "Data_Gaps", "value": "数据缺口与缺信号清单"},
             *_overview_count_rows(conclusion, "overall_action", "overall_action_count", ACTION_COUNT_ORDER),
             *_overview_count_rows(conclusion, "long_term_action", "long_term_action_count", ACTION_COUNT_ORDER),
             *_overview_count_rows(conclusion, "short_term_action", "short_term_action_count", ACTION_COUNT_ORDER),
+            *_overview_count_rows(conclusion, "hypothesis_consensus_action", "hypothesis_consensus_count", ACTION_COUNT_ORDER),
             *_overview_count_rows(conclusion, "preclose_signal", "preclose_signal_count", PRECLOSE_COUNT_ORDER),
+            {"section": "report", "item": "hypothesis_tiebreak_count", "value": str(int(conclusion.get("hypothesis_tiebreak_applied", pd.Series(dtype="bool")).fillna(False).astype(bool).sum()))},
         ]
     )
     return {
         "Operation_View": operation_view,
         "Overview": overview,
         "Daily_Conclusion": conclusion,
+        "Hypothesis_Summary": hypothesis_summary,
         "LongTerm_Evidence": long_term_evidence,
         "ShortTerm_Evidence": short_term_evidence,
         "Data_Gaps": data_gaps,
@@ -680,11 +992,16 @@ def load_daily_conclusion_context(
     symbols: list[str] | None = None,
 ) -> dict[str, object]:
     with session_scope(config) as session:
-        reference_date = signal_date or latest_closed_trading_date()
+        explicit_intraday_date = intraday_ts.date() if intraday_ts is not None else None
+        reference_date = explicit_intraday_date or signal_date or latest_closed_trading_date()
         signal_dates = _resolve_eod_signal_dates(session, requested_date=reference_date)
-        target_date = signal_dates["D"] or reference_date
-        latest_intraday_ts = intraday_ts or load_latest_intraday_signal_ts(session, bar_frequency=intraday_bar_frequency)
-        target_ts = latest_intraday_ts if latest_intraday_ts is not None and latest_intraday_ts.date() == target_date else None
+        latest_intraday_ts = load_latest_intraday_signal_ts(session, bar_frequency=intraday_bar_frequency)
+        if explicit_intraday_date is not None:
+            target_date = explicit_intraday_date
+            target_ts = latest_intraday_ts if latest_intraday_ts is not None and latest_intraday_ts.date() == explicit_intraday_date else None
+        else:
+            target_date = signal_dates["D"] or reference_date
+            target_ts = latest_intraday_ts if latest_intraday_ts is not None and latest_intraday_ts.date() == target_date else None
         eod_d = load_signals_by_date(session, signal_dates["D"], mode="eod", bar_frequency="D") if signal_dates["D"] is not None else pd.DataFrame()
         eod_w = load_signals_by_date(session, signal_dates["W"], mode="eod", bar_frequency="W") if signal_dates["W"] is not None else pd.DataFrame()
         eod_m = load_signals_by_date(session, signal_dates["M"], mode="eod", bar_frequency="M") if signal_dates["M"] is not None else pd.DataFrame()
@@ -701,8 +1018,17 @@ def load_daily_conclusion_context(
             )
         )
         market_data_by_symbol = load_market_prices_map(session, report_symbols, limit=240, as_of_date=target_date) if report_symbols else {}
+        intraday_bars_by_symbol = (
+            load_realtime_bars_map(session, symbols=report_symbols, bar_frequency=intraday_bar_frequency, limit=64)
+            if report_symbols and target_ts is not None
+            else {}
+        )
 
-    secondary_validation = build_secondary_validation(eod_d, market_data_by_symbol=market_data_by_symbol, signal_date=target_date)
+    secondary_validation = build_secondary_validation(
+        eod_d,
+        market_data_by_symbol=market_data_by_symbol,
+        signal_date=signal_dates["D"] or target_date,
+    )
     summary = build_signal_summary(
         eod_d=eod_d,
         eod_w=eod_w,
@@ -713,10 +1039,10 @@ def load_daily_conclusion_context(
     preclose = build_preclose_decisions(
         summary=summary,
         market_data_by_symbol=market_data_by_symbol,
-        intraday_bars_by_symbol=None,
-        analysis_mode="POST_CLOSE",
+        intraday_bars_by_symbol=intraday_bars_by_symbol,
+        analysis_mode="INTRADAY_PRE_CLOSE" if target_ts is not None else "POST_CLOSE",
         signal_date=target_date,
-        analysis_ts=None,
+        analysis_ts=target_ts,
         fallback_symbols=report_symbols,
     )
     return {

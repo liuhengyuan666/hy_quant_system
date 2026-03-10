@@ -13,6 +13,27 @@ from strategy_engine.multifactor import MultiFactorStrategy
 from strategy_engine.rsrs_timing import RSRSTimingStrategy
 
 
+MARKET_HYPOTHESIS_ORDER = (
+    "trend_following",
+    "mean_reversion",
+    "momentum",
+    "volatility_breakout",
+    "volume_based",
+    "cross_asset_allocation",
+    "uncategorized",
+)
+
+MARKET_HYPOTHESIS_LABELS = {
+    "trend_following": "趋势跟随",
+    "mean_reversion": "均值回归",
+    "momentum": "动量",
+    "volatility_breakout": "波动突破",
+    "volume_based": "成交量",
+    "cross_asset_allocation": "资产配置",
+    "uncategorized": "未分类",
+}
+
+
 def _to_float_series(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce").astype(float)
 
@@ -482,19 +503,20 @@ class StrategySpec:
     profile: str = "standard"
     horizon: str = "short_term"
     report_weight: float = 1.0
+    market_hypothesis: str = "uncategorized"
 
 
 def build_strategy_specs() -> list[StrategySpec]:
     return [
-        StrategySpec(name="MA_strategy", mode="single", universe="all", engine=MATrendStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
-        StrategySpec(name="RSRS_strategy", mode="single", universe="all", engine=RSRSTimingStrategy(), horizon="long_term"),
-        StrategySpec(name="EMA_cross_strategy", mode="single", universe="all", engine=EMACrossStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
-        StrategySpec(name="Triple_MA_strategy", mode="single", universe="all", engine=TripleMAStrategy(), horizon="long_term"),
-        StrategySpec(name="MACD_hist_strategy", mode="single", universe="all", engine=MACDHistogramStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
-        StrategySpec(name="RSI_reversion_strategy", mode="single", universe="all", engine=RSIReversionStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
-        StrategySpec(name="Bollinger_breakout_strategy", mode="single", universe="all", engine=BollingerBreakoutStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
-        StrategySpec(name="Bollinger_reversion_strategy", mode="single", universe="all", engine=BollingerReversionStrategy(), horizon="short_term"),
-        StrategySpec(name="Donchian_breakout_strategy", mode="single", universe="all", engine=DonchianBreakoutStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
+        StrategySpec(name="MA_strategy", mode="single", universe="all", engine=MATrendStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term", market_hypothesis="trend_following"),
+        StrategySpec(name="RSRS_strategy", mode="single", universe="all", engine=RSRSTimingStrategy(), horizon="long_term", market_hypothesis="trend_following"),
+        StrategySpec(name="EMA_cross_strategy", mode="single", universe="all", engine=EMACrossStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term", market_hypothesis="trend_following"),
+        StrategySpec(name="Triple_MA_strategy", mode="single", universe="all", engine=TripleMAStrategy(), horizon="long_term", market_hypothesis="trend_following"),
+        StrategySpec(name="MACD_hist_strategy", mode="single", universe="all", engine=MACDHistogramStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term", market_hypothesis="momentum"),
+        StrategySpec(name="RSI_reversion_strategy", mode="single", universe="all", engine=RSIReversionStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term", market_hypothesis="mean_reversion"),
+        StrategySpec(name="Bollinger_breakout_strategy", mode="single", universe="all", engine=BollingerBreakoutStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term", market_hypothesis="volatility_breakout"),
+        StrategySpec(name="Bollinger_reversion_strategy", mode="single", universe="all", engine=BollingerReversionStrategy(), horizon="short_term", market_hypothesis="mean_reversion"),
+        StrategySpec(name="Donchian_breakout_strategy", mode="single", universe="all", engine=DonchianBreakoutStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term", market_hypothesis="volatility_breakout"),
         StrategySpec(
             name="Momentum_20_strategy",
             mode="single",
@@ -503,6 +525,7 @@ def build_strategy_specs() -> list[StrategySpec]:
             supported_modes=("eod", "intraday"),
             profile="light",
             horizon="short_term",
+            market_hypothesis="momentum",
         ),
         StrategySpec(
             name="Momentum_60_strategy",
@@ -510,16 +533,17 @@ def build_strategy_specs() -> list[StrategySpec]:
             universe="all",
             engine=MomentumStrategy(lookback_days=60, threshold=0.08, name="Momentum_60_strategy"),
             horizon="long_term",
+            market_hypothesis="momentum",
         ),
-        StrategySpec(name="ROC_20_strategy", mode="single", universe="all", engine=ROCStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
-        StrategySpec(name="Volatility_breakout_strategy", mode="single", universe="all", engine=VolatilityBreakoutStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
-        StrategySpec(name="ATR_channel_strategy", mode="single", universe="all", engine=ATRChannelStrategy(), horizon="long_term"),
-        StrategySpec(name="KDJ_cross_strategy", mode="single", universe="all", engine=KDJCrossStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term"),
-        StrategySpec(name="CCI_reversion_strategy", mode="single", universe="all", engine=CCIReversionStrategy(), horizon="short_term"),
-        StrategySpec(name="OBV_trend_strategy", mode="single", universe="all", engine=OBVTrendStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="long_term"),
-        StrategySpec(name="ADX_trend_strategy", mode="single", universe="all", engine=ADXTrendStrategy(), horizon="long_term"),
-        StrategySpec(name="ETF_rotation_strategy", mode="cross", universe="etf", engine=ETFRotationStrategy(), horizon="long_term", report_weight=1.2),
-        StrategySpec(name="MultiFactor_strategy", mode="cross", universe="etf", engine=MultiFactorStrategy(), horizon="long_term", report_weight=1.2),
+        StrategySpec(name="ROC_20_strategy", mode="single", universe="all", engine=ROCStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term", market_hypothesis="momentum"),
+        StrategySpec(name="Volatility_breakout_strategy", mode="single", universe="all", engine=VolatilityBreakoutStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term", market_hypothesis="volatility_breakout"),
+        StrategySpec(name="ATR_channel_strategy", mode="single", universe="all", engine=ATRChannelStrategy(), horizon="long_term", market_hypothesis="volatility_breakout"),
+        StrategySpec(name="KDJ_cross_strategy", mode="single", universe="all", engine=KDJCrossStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="short_term", market_hypothesis="mean_reversion"),
+        StrategySpec(name="CCI_reversion_strategy", mode="single", universe="all", engine=CCIReversionStrategy(), horizon="short_term", market_hypothesis="mean_reversion"),
+        StrategySpec(name="OBV_trend_strategy", mode="single", universe="all", engine=OBVTrendStrategy(), supported_modes=("eod", "intraday"), profile="light", horizon="long_term", market_hypothesis="volume_based"),
+        StrategySpec(name="ADX_trend_strategy", mode="single", universe="all", engine=ADXTrendStrategy(), horizon="long_term", market_hypothesis="trend_following"),
+        StrategySpec(name="ETF_rotation_strategy", mode="cross", universe="etf", engine=ETFRotationStrategy(), horizon="long_term", report_weight=1.2, market_hypothesis="cross_asset_allocation"),
+        StrategySpec(name="MultiFactor_strategy", mode="cross", universe="etf", engine=MultiFactorStrategy(), horizon="long_term", report_weight=1.2, market_hypothesis="cross_asset_allocation"),
     ]
 
 
@@ -533,6 +557,14 @@ def list_strategy_names_by_mode(supported_mode: str) -> list[str]:
 
 def list_strategy_names_by_horizon(horizon: str) -> list[str]:
     return [item.name for item in build_strategy_specs() if item.horizon == horizon]
+
+
+def list_strategy_names_by_hypothesis(market_hypothesis: str) -> list[str]:
+    return [item.name for item in build_strategy_specs() if item.market_hypothesis == market_hypothesis]
+
+
+def market_hypothesis_label(market_hypothesis: str) -> str:
+    return MARKET_HYPOTHESIS_LABELS.get(market_hypothesis, MARKET_HYPOTHESIS_LABELS["uncategorized"])
 
 
 def resolve_strategy_specs(

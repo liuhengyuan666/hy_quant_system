@@ -11,6 +11,7 @@ from xml.etree import ElementTree
 import pandas as pd
 
 from signal_service.strategy_matrix_report import (
+    build_hypothesis_statistics,
     build_strategy_report_frames,
     build_strategy_signal_matrix,
     build_strategy_statistics,
@@ -225,6 +226,31 @@ class StrategyMatrixReportTests(unittest.TestCase):
         self.assertEqual(int(ma_stats["sell_count"]), 1)
         self.assertEqual(int(ma_stats["active_signal_count"]), 2)
 
+    def test_build_hypothesis_statistics_groups_strategy_counts(self):
+        summary = self._summary()
+        matrix = build_strategy_signal_matrix(
+            summary,
+            pd.DataFrame(
+                [
+                    {"symbol": "510300", "strategy": "MA_strategy", "signal": "BUY"},
+                    {"symbol": "000300", "strategy": "MA_strategy", "signal": "SELL"},
+                    {"symbol": "510300", "strategy": "RSI_reversion_strategy", "signal": "SELL"},
+                ]
+            ),
+            supported_mode="eod",
+        )
+
+        stats = build_hypothesis_statistics({"EOD_D_Matrix": matrix})
+        trend_stats = stats[stats["market_hypothesis"] == "trend_following"].iloc[0]
+        mean_reversion_stats = stats[stats["market_hypothesis"] == "mean_reversion"].iloc[0]
+
+        self.assertEqual(trend_stats["market_hypothesis_label"], "趋势跟随")
+        self.assertEqual(int(trend_stats["strategy_count"]), 5)
+        self.assertEqual(int(trend_stats["buy_count"]), 1)
+        self.assertEqual(int(trend_stats["sell_count"]), 1)
+        self.assertEqual(int(trend_stats["active_signal_count"]), 2)
+        self.assertEqual(int(mean_reversion_stats["sell_count"]), 1)
+
     def test_export_strategy_matrix_workbook_writes_expected_sheets(self):
         summary = self._summary()
         eod_signals = pd.DataFrame(
@@ -284,6 +310,7 @@ class StrategyMatrixReportTests(unittest.TestCase):
 
         self.assertIn("Overview", sheet_names)
         self.assertIn("Action_Focus", sheet_names)
+        self.assertIn("Hypothesis_Stats", sheet_names)
         self.assertIn("EOD_D_Matrix", sheet_names)
         self.assertIn("PRE_CLOSE_View", sheet_names)
 
