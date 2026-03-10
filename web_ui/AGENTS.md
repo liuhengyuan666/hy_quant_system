@@ -11,15 +11,18 @@
 ## CONVENTIONS
 - dashboard 优先展示最新快照，但会混合消费 `summary`、`intraday`、`preclose`、`daily_conclusion` 四类产物；改文件名前缀或目录时必须同步更新服务层。
 - 行情面板允许使用 `preclose` 快照覆盖时间更旧的 `realtime_bar`；如果仍是旧盘中数据，source 必须明确标成 `Stale Intraday` 类语义。
+- 收盘后榜单默认按最近闭市日 `daily close` 排序；不要让 `preclose snapshot` 在 15:00 后继续覆盖正式收盘价。
 - `Hypothesis Focus` 依赖 `daily_conclusion_*.csv`；refresh 链路必须保证导出链同步产出日报，否则该面板会空。
 - 页面文案继续保持中英对照；新增字段时同步补 `COLUMN_LABELS` / `VALUE_LABELS`。
-- 桌面端主网格默认最多两列；除非明确需要，不要再回退成三列挤压表格。
+- Quote 榜单表头目前要求纯中文；`Latest Intraday Signals` 保留中英列名但必须显示中文 `name`。
+- `Index Pool`、`ETF Pool` 以及其余主要表格当前都按 full-row 布局；除非用户明确要求，不要再改回半宽卡片式密排。
 
 ## ANTI-PATTERNS
 - 不要只改前端 HTML 而不更新 `dashboard_service.py`；数据契约不一致会直接出现空表。
 - 不要把昨天的行情继续标成 `实时快照 / Intraday`。
 - 不要让 refresh 只更新 `summary` 而漏掉 `daily_conclusion`；否则分组共识面板会失真或为空。
 - 不要随意删除 `quote_source`、`updated_at`、`hypothesis_summary_text` 这类解释字段；它们是看板可读性的核心。
+- 不要假设页面每次首屏都能自动拿到最新 JSON；前端 fetch 必须显式 `cache: 'no-store'`，API 和 HTML 响应也保持 no-store。
 
 ## COMMANDS
 - 本地启动：`python main.py run-dashboard --host 127.0.0.1 --port 8000`

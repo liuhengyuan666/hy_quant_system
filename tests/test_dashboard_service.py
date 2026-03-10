@@ -8,8 +8,11 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from web_ui.dashboard_service import (
+    _enrich_latest_intraday,
     _mark_stale_quote,
     _merge_preclose_fallback,
+    _quote_runtime_context,
+    _resolve_quote_row,
     _sort_quote_rows,
     _split_quote_rows,
     build_dashboard_snapshot,
@@ -18,6 +21,19 @@ from web_ui.dashboard_service import (
 
 
 class DashboardServiceTests(unittest.TestCase):
+    def test_quote_runtime_context_uses_latest_closed_day_outside_session(self):
+        runtime = type("Runtime", (), {
+            "intraday_window_am_start": "09:30",
+            "intraday_window_am_end": "11:30",
+            "intraday_window_pm_start": "13:00",
+            "intraday_window_pm_end": "15:00",
+        })()
+
+        use_live, closed_day = _quote_runtime_context(runtime, reference=datetime(2026, 3, 10, 23, 0, tzinfo=ZoneInfo("Asia/Shanghai")))
+
+        self.assertFalse(use_live)
+        self.assertEqual(str(closed_day), "2026-03-10")
+
     def test_sort_quote_rows_orders_by_change_pct_descending_and_places_missing_last(self):
         rows = [
             {"symbol": "510300", "change_pct": 0.012, "change_value": 0.05},
@@ -35,7 +51,8 @@ class DashboardServiceTests(unittest.TestCase):
             {"symbol": "000905", "change_pct": 0.034},
             {"symbol": "510300", "change_pct": 0.012},
             {"symbol": "000300", "change_pct": -0.023},
-            {"symbol": "159915", "change_pct": None},
+            {"symbol": "159915", "change_pct": None, "quote_source": "无数据 / No Data", "asset_type": "ETF", "current_price": None},
+            {"symbol": "159611", "change_pct": None, "quote_source": "旧盘中快照 / Stale Intraday", "asset_type": "ETF", "current_price": 1.157},
             {"symbol": "000852", "change_pct": 0.0},
         ]
 
@@ -43,7 +60,9 @@ class DashboardServiceTests(unittest.TestCase):
 
         self.assertEqual([row["symbol"] for row in split["gainers"]], ["000905", "510300"])
         self.assertEqual([row["symbol"] for row in split["losers"]], ["000300"])
-        self.assertEqual([row["symbol"] for row in split["flat"]], ["000852", "159915"])
+        self.assertEqual([row["symbol"] for row in split["flat"]], ["000852"])
+        self.assertEqual([row["symbol"] for row in split["stale"]], ["159611"])
+        self.assertEqual([row["symbol"] for row in split["missing"]], ["159915"])
 
     def test_merge_preclose_fallback_overrides_stale_intraday_quote(self):
         row = {
@@ -86,6 +105,44 @@ class DashboardServiceTests(unittest.TestCase):
 
         self.assertEqual(stale["quote_source"], "旧盘中快照 / Stale Intraday")
 
+    def test_resolve_quote_row_prefers_daily_close_outside_session(self):
+        row = _resolve_quote_row(
+            symbol="000300",
+            asset_type="INDEX",
+            meta=None,
+            daily_frame=__import__("pandas").DataFrame([
+                {"date": "2026-03-05", "close": 4647.692},
+                {"date": "2026-03-06", "close": 4660.439},
+            ]),
+            intraday_frame=__import__("pandas").DataFrame([
+                {"date": "2026-03-10T14:50:12+08:00", "close": 4590.77},
+            ]),
+            preclose_by_symbol={
+                "000300": {
+                    "latest_price": 4590.77,
+                    "prev_close": 4647.692,
+                    "day_change_pct": -0.0122,
+                    "analysis_ts": "2026-03-10T14:50:12+08:00",
+                    "signal_date": "2026-03-10",
+                }
+            },
+            use_live_quotes=False,
+            reference_date=__import__("datetime").date(2026, 3, 10),
+        )
+
+        self.assertEqual(row["current_level"], 4660.439)
+        self.assertEqual(row["prev_close"], 4647.692)
+        self.assertEqual(row["quote_source"], "旧收盘价格 / Stale Daily Close")
+
+    def test_enrich_latest_intraday_adds_name_from_symbol_meta(self):
+        latest_intraday = __import__("pandas").DataFrame([
+            {"symbol": "510300", "strategy": "EMA_cross_strategy", "signal": "BUY", "ts": "2026-03-10T10:16:29+08:00"}
+        ])
+
+        enriched = _enrich_latest_intraday(latest_intraday, __import__("pandas").DataFrame())
+
+        self.assertEqual(enriched.iloc[0]["name"], "沪深300ETF")
+
     def test_build_dashboard_snapshot_reads_latest_reports(self):
         market_overview = {
             "quote_status": "实时数据库 / Live DB",
@@ -96,9 +153,13 @@ class DashboardServiceTests(unittest.TestCase):
             "index_quote_gainers": [{"symbol": "000300", "name": "沪深300", "current_level": 3812.12, "change_value": 46.21, "change_pct": 0.0123}],
             "index_quote_losers": [],
             "index_quote_flat": [],
+            "index_quote_stale": [],
+            "index_quote_missing": [],
             "etf_quote_gainers": [{"symbol": "510300", "name": "沪深300ETF", "current_price": 4.5231, "change_value": 0.0363, "change_pct": 0.0081}],
             "etf_quote_losers": [],
             "etf_quote_flat": [],
+            "etf_quote_stale": [],
+            "etf_quote_missing": [],
         }
         with tempfile.TemporaryDirectory() as temp_dir, patch(
             "web_ui.dashboard_service._build_market_overview_tables",
@@ -175,9 +236,13 @@ class DashboardServiceTests(unittest.TestCase):
             "index_quote_gainers": [],
             "index_quote_losers": [],
             "index_quote_flat": [],
+            "index_quote_stale": [],
+            "index_quote_missing": [],
             "etf_quote_gainers": [],
             "etf_quote_losers": [],
             "etf_quote_flat": [],
+            "etf_quote_stale": [],
+            "etf_quote_missing": [],
         }
         with tempfile.TemporaryDirectory() as temp_dir, patch(
             "web_ui.dashboard_service._build_market_overview_tables",

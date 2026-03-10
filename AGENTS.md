@@ -48,6 +48,8 @@
 - 汇总导出约定：`summary/group/top/push` 四类产物同目录生成，文件名前缀稳定。
 - dashboard 默认混合消费 `summary` / `intraday` / `preclose` / `daily_conclusion`；改任一导出文件名或字段时必须同步核对 `web_ui/dashboard_service.py`。
 - `daily_conclusion` 在显式传入 `intraday_ts` 时允许生成“当天盘中版”；不要再把整份日报的目标日期强制回退到最近已闭市日。
+- 收盘后 quote 面板优先使用最近闭市日 `daily close`；`preclose` 只在盘中或缺数据时兜底，不要再覆盖正式收盘价。
+- ETF 日线抓取当前依赖 Eastmoney；`fetch_etf.py` 必须走 `disable_requests_env_proxy()`，否则这个环境会因为代理/SSL 导致 3/10 之后的 ETF 收盘价落库失败。
 - 单个 symbol 失败不应拖垮整批任务，但吞错时至少保留可追踪上下文。
 
 ## ANTI-PATTERNS
@@ -59,6 +61,7 @@
 - 不要新增返回字段却不更新对应 CLI、README、说明文档和测试。
 - 不要让报告对缺行情标的泄露旧 summary 残留结论；缺数据时明确标注 `NO_DATA` / 中性动作。
 - 不要让 dashboard 把旧盘中快照伪装成今天实时；需要明确 source / updated_at 语义。
+- 不要让非盘中榜单继续沿用 `Preclose Snapshot` 排序；收盘后榜单必须以最近闭市日 `daily close` 为准。
 
 ## COMMANDS
 - 安装依赖：`python -m pip install -r requirements.txt`
