@@ -36,6 +36,7 @@
 ## 本地验证
 
 - 详细验证步骤见：`VALIDATION_CHECKLIST.md`
+- 建议使用 **Python 3.11+**（当前配置加载依赖标准库 `tomllib`）
 - 最常用验证命令：
 
 ```bash
@@ -197,7 +198,13 @@ python main.py export-daily-conclusion
 - `csv_path`：`reports/daily_conclusion/` 下的简明结论主表
 - `operation_csv_path`：更短的最终操作版主表
 - `json_path`：结构化 JSON 结论
-- `xlsx_path`：包含 `Operation_View / Daily_Conclusion / LongTerm_Evidence / ShortTerm_Evidence / Data_Gaps` 的 Excel 工作簿
+- `xlsx_path`：包含 `Operation_View / Daily_Conclusion / Hypothesis_Summary / LongTerm_Evidence / ShortTerm_Evidence / Data_Gaps` 的 Excel 工作簿
+
+`Daily_Conclusion` / `Operation_View` 当前还会额外给出：
+
+- `hypothesis_consensus_action`：按策略哲学分组后的共识方向
+- `hypothesis_summary_text`：更直观的分组共识摘要文本
+- `hypothesis_tiebreak_applied`：是否真的用分组共识改判了最终动作
 
 11.4) 导出数据缺口诊断报告
 
@@ -230,11 +237,42 @@ Dashboard 当前提供：
 
 - 顶部指标卡：summary / intraday / push / priority action 数量
 - `Action Focus`：优先动作与重点观察标的
+- `Hypothesis Focus`：分组共识摘要与是否触发改判
 - `Push Candidates`：最新变化推送候选
 - `Latest Intraday Signals`：最近盘中信号
 - `Latest Summary`：最新汇总结果
 - 页面自动 `15s` 轮询最新 CSV 快照
 - 手动按钮：触发一次 `run_intraday_iteration()` 并立即刷新页面数据
+
+## 2.1 分组共识运行时配置
+
+文件：`config/runtime.toml`
+
+```toml
+[runtime.hypothesis.weights]
+trend_following = 1.0
+mean_reversion = 1.0
+momentum = 1.0
+volatility_breakout = 1.0
+volume_based = 1.0
+cross_asset_allocation = 1.2
+uncategorized = 0.5
+
+[runtime.hypothesis.tiebreak]
+conflict_min_score = 0.18
+conflict_min_confidence = 0.55
+hold_min_score = 0.28
+hold_min_confidence = 0.60
+min_groups = 2
+```
+
+说明：
+
+- `weights` 控制不同策略哲学分组在共识中的相对权重
+- `cross_asset_allocation` 默认略高，适合 ETF 轮动 / 多因子类策略
+- `uncategorized` 默认较低，避免未分类策略过度影响最终结论
+- `tiebreak` 只作用于两类场景：`长短线冲突` 或 `长短线都 HOLD`
+- 其余情形仍优先沿用原来的 `long_term_action / short_term_action` 规则
 
 ## 3. 数据库连接配置
 
