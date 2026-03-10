@@ -9,6 +9,7 @@
 - 调度与运行时配置：`test_scheduler_jobs.py`、`test_runtime_config.py`、`test_trading_calendar.py`
 - 收盘前 / 盘中 / 新报告：`test_preclose_decision.py`、`test_intraday_runner.py`、`test_daily_conclusion_report.py`、`test_data_gap_report.py`、`test_strategy_matrix_report.py`
 - dashboard：`test_dashboard_service.py`、`test_dashboard_app.py`
+- 外部抓取兼容：`test_fetch_etf.py`
 - 日期解析与兼容场景：`test_strategy_matrix_date_resolution.py`、`test_database_schema_compat.py`
 
 ## CONVENTIONS
@@ -18,6 +19,8 @@
 - 需要覆盖单个行为时先跑目标测试模块，再跑全量 `discover`。
 - 涉及导出链路时，除了结构字段，也要断言关键行数、sheet 名称或路径字段，避免“命令成功但内容缺行”。
 - 涉及 dashboard refresh 时，要同时断言 `summary` 与 `daily_conclusion` 侧效应；否则 `Hypothesis Focus` 这类面板容易空表。
+- 涉及收盘后 quote 逻辑时，要区分 `Daily Close / Preclose Snapshot / Stale Intraday / No Data`，不要只断言“有值”。
+- 涉及 ETF 历史抓取时，要覆盖 `disable_requests_env_proxy()` 这层保护，防止环境代理导致东财接口在测试外 silently fail。
 
 ## COMMANDS
 - 全量：`python -m unittest discover -s tests -p "test_*.py"`
