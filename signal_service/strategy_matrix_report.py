@@ -17,7 +17,7 @@ from signal_service.preclose_decision import build_preclose_decisions
 from signal_service.secondary_validation import build_secondary_validation
 from signal_service.summary_view import build_signal_summary
 from signal_service.symbol_meta import enrich_signal_frame_with_symbol_names
-from strategy_engine.library import build_strategy_specs, list_strategy_names
+from strategy_engine.library import MARKET_HYPOTHESIS_ORDER, build_strategy_specs, list_strategy_names, market_hypothesis_label
 
 MATRIX_META_COLUMNS = ["conviction_rank", "symbol", "display_symbol", "name", "asset_type", "bucket"]
 ACTION_FOCUS_COLUMNS = [
@@ -295,6 +295,48 @@ def build_strategy_statistics(matrix_frames: dict[str, pd.DataFrame]) -> pd.Data
     return pd.DataFrame(rows)
 
 
+def build_hypothesis_statistics(matrix_frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    specs = build_strategy_specs()
+    strategies_by_hypothesis: dict[str, list[str]] = {}
+    for spec in specs:
+        strategies_by_hypothesis.setdefault(spec.market_hypothesis, []).append(spec.name)
+
+    rows: list[dict[str, object]] = []
+    states = ["BUY", "SELL", "HOLD", "NOT_RUN", "N/A", "NO_DATA", "MISSING"]
+    for sheet_name, frame in matrix_frames.items():
+        for market_hypothesis in MARKET_HYPOTHESIS_ORDER:
+            strategy_columns = [name for name in strategies_by_hypothesis.get(market_hypothesis, []) if name in frame.columns]
+            if not strategy_columns:
+                continue
+
+            counts = {state: 0 for state in states}
+            for strategy_name in strategy_columns:
+                strategy_counts = frame[strategy_name].astype(str).value_counts().to_dict()
+                for state in states:
+                    counts[state] += int(strategy_counts.get(state, 0))
+
+            applicable = len(frame.index) * len(strategy_columns) - counts["NOT_RUN"] - counts["N/A"]
+            rows.append(
+                {
+                    "sheet": sheet_name,
+                    "market_hypothesis": market_hypothesis,
+                    "market_hypothesis_label": market_hypothesis_label(market_hypothesis),
+                    "strategy_count": int(len(strategy_columns)),
+                    "buy_count": counts["BUY"],
+                    "sell_count": counts["SELL"],
+                    "hold_count": counts["HOLD"],
+                    "not_run_count": counts["NOT_RUN"],
+                    "na_count": counts["N/A"],
+                    "no_data_count": counts["NO_DATA"],
+                    "missing_count": counts["MISSING"],
+                    "applicable_rows": int(applicable - counts["NO_DATA"]),
+                    "active_signal_count": int(counts["BUY"] + counts["SELL"]),
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
 def _active_signal_text(frame: pd.DataFrame) -> dict[str, str]:
     if frame.empty or "symbol" not in frame.columns:
         return {}
@@ -421,6 +463,7 @@ def build_strategy_report_frames(
         {"section": "sheet", "item": "Action_Focus", "value": "仅保留非 HOLD 的重点动作视图"},
         {"section": "sheet", "item": "Symbol_Summary", "value": "标的级综合摘要"},
         {"section": "sheet", "item": "Strategy_Stats", "value": "策略在各矩阵中的统计"},
+        {"section": "sheet", "item": "Hypothesis_Stats", "value": "按策略哲学分组后的矩阵统计"},
     ]
 
     frames: dict[str, pd.DataFrame] = {
@@ -428,6 +471,7 @@ def build_strategy_report_frames(
         "Action_Focus": action_focus,
         "Symbol_Summary": symbol_summary[[column for column in SUMMARY_SHEET_COLUMNS + ["preclose_signal", "preclose_score", "preclose_reason", "preclose_trend_state"] if column in symbol_summary.columns]],
         "Strategy_Stats": build_strategy_statistics(matrix_frames),
+        "Hypothesis_Stats": build_hypothesis_statistics(matrix_frames),
         "EOD_D_Matrix": eod_d_matrix,
         "EOD_W_Matrix": eod_w_matrix,
         "EOD_M_Matrix": eod_m_matrix,
