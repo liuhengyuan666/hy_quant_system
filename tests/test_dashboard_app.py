@@ -32,9 +32,15 @@ class DashboardAppTests(unittest.TestCase):
             report_root = Path(temp_dir) / "reports"
             (report_root / "summary").mkdir(parents=True)
             (report_root / "intraday").mkdir(parents=True)
+            (report_root / "daily_conclusion").mkdir(parents=True)
             (report_root / "summary" / "signal_summary_20260309_1102.csv").write_text(
                 "conviction_rank,symbol,name,intraday,dashboard_action,composite_score\n"
                 "1,510300,沪深300ETF,BUY,PRIORITY_BUY,7.0\n",
+                encoding="utf-8-sig",
+            )
+            (report_root / "daily_conclusion" / "daily_conclusion_20260309.csv").write_text(
+                "conviction_rank,symbol,name,overall_action,hypothesis_consensus_action,hypothesis_tiebreak_applied,hypothesis_summary_text\n"
+                "1,510300,沪深300ETF,BUY,BUY,True,分组共识改判为 BUY（2 组；趋势跟随@long_term | 动量@short_term）\n",
                 encoding="utf-8-sig",
             )
 
@@ -48,9 +54,11 @@ class DashboardAppTests(unittest.TestCase):
         self.assertEqual(snapshot.status_code, 200)
         self.assertEqual(snapshot.json()["metrics"]["summary_rows"], 1)
         self.assertEqual(snapshot.json()["metrics"]["index_quote_rows"], 1)
+        self.assertEqual(snapshot.json()["metrics"]["hypothesis_focus_rows"], 1)
         self.assertEqual(html.status_code, 200)
         self.assertIn("盘中监控仪表盘", html.text)
         self.assertIn("Index Pool｜指数池行情", html.text)
+        self.assertIn("Hypothesis Focus｜分组共识", html.text)
         self.assertIn("Top Gainers｜涨幅榜", html.text)
         self.assertIn("Top Losers｜跌幅榜", html.text)
         self.assertIn("涨跌点/额 / Change", html.text)
