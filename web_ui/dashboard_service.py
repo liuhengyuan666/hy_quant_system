@@ -9,10 +9,11 @@ import pandas as pd
 
 from config.settings import PROJECT_ROOT, SymbolMeta, load_runtime_config, load_symbol_meta_map, load_universe_config
 from core.clock import now_shanghai
-from core.trading_calendar import latest_closed_trading_date
+from core.trading_calendar import is_trading_session, latest_closed_trading_date
+from data_service.sync_market import sync_market_data
 from data_storage.database import session_scope
 from data_storage.realtime_repository import load_realtime_bars_map
-from data_storage.repository import load_market_prices_map
+from data_storage.repository import load_latest_market_date, load_market_prices_map
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -127,14 +128,18 @@ def _safe_timestamp(value: object) -> datetime | None:
 
 def _quote_reference_date() -> date:
     current = now_shanghai()
-    if current.weekday() >= 5:
-        return latest_closed_trading_date(current)
-    return current.date()
+    return latest_closed_trading_date(current)
+
+
+def _quote_runtime_context(runtime_config: Any, reference: datetime | None = None) -> tuple[bool, date]:
+    current = reference or now_shanghai()
+    return is_trading_session(current, runtime_config=runtime_config), latest_closed_trading_date(current)
 
 
 def _base_quote_row(symbol: str, asset_type: str, meta: SymbolMeta | None) -> dict[str, Any]:
     return {
         "symbol": symbol,
+        "asset_type": asset_type,
         "display_symbol": meta.display_symbol if meta is not None else symbol,
         "name": meta.name if meta is not None else symbol,
         _quote_key(asset_type): None,
@@ -175,6 +180,7 @@ def _build_live_quote_row(
     intraday_frame: pd.DataFrame,
 ) -> dict[str, Any]:
     row = _base_quote_row(symbol=symbol, asset_type=asset_type, meta=meta)
+    row["asset_type"] = asset_type
     key = _quote_key(asset_type)
 
     ordered_intraday = intraday_frame.sort_values("date").copy() if not intraday_frame.empty else pd.DataFrame()
@@ -283,14 +289,92 @@ def _mark_stale_quote(row: dict[str, Any], reference_date: date) -> dict[str, An
     return row
 
 
+def _resolve_quote_row(
+    symbol: str,
+    asset_type: str,
+    meta: SymbolMeta | None,
+    daily_frame: pd.DataFrame,
+    intraday_frame: pd.DataFrame,
+    preclose_by_symbol: dict[str, dict[str, Any]],
+    use_live_quotes: bool,
+    reference_date: date,
+) -> dict[str, Any]:
+    selected_intraday = intraday_frame if use_live_quotes else pd.DataFrame()
+    row = _build_live_quote_row(
+        symbol=symbol,
+        asset_type=asset_type,
+        meta=meta,
+        daily_frame=daily_frame,
+        intraday_frame=selected_intraday,
+    )
+    if use_live_quotes or daily_frame.empty:
+        row = _merge_preclose_fallback(row, asset_type=asset_type, preclose_by_symbol=preclose_by_symbol)
+    return _mark_stale_quote(row, reference_date=reference_date)
+
+
+def _enrich_latest_intraday(latest_intraday: pd.DataFrame, summary: pd.DataFrame) -> pd.DataFrame:
+    if latest_intraday.empty or "symbol" not in latest_intraday.columns:
+        return latest_intraday
+
+    enriched = latest_intraday.copy()
+    symbol_meta_map = load_symbol_meta_map()
+    summary_map: dict[str, dict[str, Any]] = {}
+    if not summary.empty and "symbol" in summary.columns:
+        subset_columns = [column for column in ["symbol", "name", "display_symbol"] if column in summary.columns]
+        summary_records: list[dict[str, Any]] = []
+        seen_symbols: set[str] = set()
+        for record in summary.loc[:, subset_columns].to_dict("records"):
+            symbol = str(record.get("symbol", ""))
+            if not symbol.strip() or symbol in seen_symbols:
+                continue
+            seen_symbols.add(symbol)
+            summary_records.append({str(key): value for key, value in record.items()})
+        summary_map = {
+            str(record.get("symbol", "")): record
+            for record in summary_records
+            if str(record.get("symbol", "")).strip()
+        }
+
+    if "name" not in enriched.columns:
+        enriched["name"] = pd.Series(dtype="string")
+    if "display_symbol" not in enriched.columns:
+        enriched["display_symbol"] = pd.Series(dtype="string")
+
+    for idx in enriched.index:
+        symbol = str(enriched.at[idx, "symbol"])
+        summary_meta = summary_map.get(symbol, {})
+        config_meta = symbol_meta_map.get(symbol)
+        current_name = enriched.at[idx, "name"] if "name" in enriched.columns else None
+        if not str(current_name if current_name is not None and not pd.isna(current_name) else "").strip():
+            if str(summary_meta.get("name", "")).strip():
+                enriched.at[idx, "name"] = str(summary_meta["name"])
+            elif config_meta is not None:
+                enriched.at[idx, "name"] = config_meta.name
+        current_display_symbol = enriched.at[idx, "display_symbol"] if "display_symbol" in enriched.columns else None
+        if not str(current_display_symbol if current_display_symbol is not None and not pd.isna(current_display_symbol) else "").strip() and config_meta is not None:
+            enriched.at[idx, "display_symbol"] = config_meta.display_symbol
+    return enriched
+
+
 def _split_quote_rows(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     gainers: list[dict[str, Any]] = []
     losers: list[dict[str, Any]] = []
     flat: list[dict[str, Any]] = []
+    stale: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
 
     for row in rows:
         change_pct = _safe_float(row.get("change_pct"))
-        if change_pct is None or change_pct == 0:
+        quote_source = str(row.get("quote_source", ""))
+        quote_key = _quote_key(str(row.get("asset_type", "ETF")))
+        if change_pct is None:
+            if "Stale" in quote_source or "旧" in quote_source:
+                stale.append(row)
+            elif row.get(quote_key) is None or "No Data" in quote_source or "无数据" in quote_source:
+                missing.append(row)
+            else:
+                stale.append(row)
+        elif change_pct == 0:
             flat.append(row)
         elif change_pct > 0:
             gainers.append(row)
@@ -300,10 +384,14 @@ def _split_quote_rows(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, An
     gainers = _sort_quote_rows(gainers)
     losers = sorted(losers, key=lambda row: (_safe_float(row.get("change_pct")) or 0.0, str(row.get("symbol", ""))))
     flat = sorted(flat, key=lambda row: str(row.get("symbol", "")))
+    stale = sorted(stale, key=lambda row: str(row.get("symbol", "")))
+    missing = sorted(missing, key=lambda row: str(row.get("symbol", "")))
     return {
         "gainers": gainers,
         "losers": losers,
         "flat": flat,
+        "stale": stale,
+        "missing": missing,
     }
 
 
@@ -311,7 +399,7 @@ def _build_market_overview_tables(preclose: pd.DataFrame) -> dict[str, Any]:
     universe = load_universe_config()
     symbol_meta_map = load_symbol_meta_map()
     runtime = load_runtime_config()
-    snapshot_today = _quote_reference_date()
+    use_live_quotes, snapshot_today = _quote_runtime_context(runtime)
     all_symbols = list(universe.index_symbols) + list(universe.etf_symbols)
     preclose_rows = _frame_to_records(preclose, limit=max(len(preclose.index), 1_000))
     preclose_by_symbol = {
@@ -324,9 +412,15 @@ def _build_market_overview_tables(preclose: pd.DataFrame) -> dict[str, Any]:
     quote_status = "实时数据库 / Live DB"
 
     try:
+        if all_symbols and not use_live_quotes:
+            with session_scope() as session:
+                latest_market_date = load_latest_market_date(session, all_symbols)
+            if latest_market_date is None or latest_market_date < snapshot_today:
+                sync_market_data(index_symbols=universe.index_symbols, etf_symbols=universe.etf_symbols, end_date=snapshot_today.strftime("%Y%m%d"))
+
         with session_scope() as session:
             if all_symbols:
-                market_data_by_symbol = load_market_prices_map(session, all_symbols, limit=240)
+                market_data_by_symbol = load_market_prices_map(session, all_symbols, limit=240, as_of_date=snapshot_today)
                 intraday_bars_by_symbol = load_realtime_bars_map(
                     session,
                     symbols=all_symbols,
@@ -341,15 +435,17 @@ def _build_market_overview_tables(preclose: pd.DataFrame) -> dict[str, Any]:
         rows: list[dict[str, Any]] = []
         for symbol in symbols:
             meta = symbol_meta_map.get(symbol)
-            row = _build_live_quote_row(
+            row = _resolve_quote_row(
                 symbol=symbol,
                 asset_type=asset_type,
                 meta=meta,
                 daily_frame=market_data_by_symbol.get(symbol, pd.DataFrame()),
                 intraday_frame=intraday_bars_by_symbol.get(symbol, pd.DataFrame()),
+                preclose_by_symbol=preclose_by_symbol,
+                use_live_quotes=use_live_quotes,
+                reference_date=snapshot_today,
             )
-            row = _merge_preclose_fallback(row, asset_type=asset_type, preclose_by_symbol=preclose_by_symbol)
-            rows.append(_mark_stale_quote(row, reference_date=snapshot_today))
+            rows.append(row)
         return _sort_quote_rows(rows)
 
     index_quotes = _rows_for_symbols(list(universe.index_symbols), asset_type="INDEX")
@@ -366,9 +462,13 @@ def _build_market_overview_tables(preclose: pd.DataFrame) -> dict[str, Any]:
         "index_quote_gainers": index_split["gainers"],
         "index_quote_losers": index_split["losers"],
         "index_quote_flat": index_split["flat"],
+        "index_quote_stale": index_split["stale"],
+        "index_quote_missing": index_split["missing"],
         "etf_quote_gainers": etf_split["gainers"],
         "etf_quote_losers": etf_split["losers"],
         "etf_quote_flat": etf_split["flat"],
+        "etf_quote_stale": etf_split["stale"],
+        "etf_quote_missing": etf_split["missing"],
     }
 
 
@@ -465,6 +565,7 @@ def build_dashboard_snapshot(report_root: Path | str | None = None) -> dict[str,
 
     latest_intraday = intraday_signals.copy()
     if not latest_intraday.empty:
+        latest_intraday = _enrich_latest_intraday(latest_intraday, summary)
         sort_columns = [column for column in ["ts", "symbol", "strategy"] if column in latest_intraday.columns]
         if sort_columns:
             for column in reversed(sort_columns[1:]):
@@ -512,9 +613,13 @@ def build_dashboard_snapshot(report_root: Path | str | None = None) -> dict[str,
             "index_quote_gainers": market_overview["index_quote_gainers"],
             "index_quote_losers": market_overview["index_quote_losers"],
             "index_quote_flat": market_overview["index_quote_flat"],
+            "index_quote_stale": market_overview["index_quote_stale"],
+            "index_quote_missing": market_overview["index_quote_missing"],
             "etf_quote_gainers": market_overview["etf_quote_gainers"],
             "etf_quote_losers": market_overview["etf_quote_losers"],
             "etf_quote_flat": market_overview["etf_quote_flat"],
+            "etf_quote_stale": market_overview["etf_quote_stale"],
+            "etf_quote_missing": market_overview["etf_quote_missing"],
             "action_focus": _frame_to_records(_ensure_frame(action_focus), limit=12),
             "hypothesis_focus": _frame_to_records(_ensure_frame(hypothesis_focus), limit=12),
             "summary": _frame_to_records(_ensure_frame(summary), limit=20),
