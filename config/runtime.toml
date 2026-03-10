@@ -17,6 +17,22 @@ trigger_time = "14:45"
 decision_time = "14:50"
 output_dir = "reports/preclose"
 
+[runtime.hypothesis.weights]
+trend_following = 1.0
+mean_reversion = 1.0
+momentum = 1.0
+volatility_breakout = 1.0
+volume_based = 1.0
+cross_asset_allocation = 1.2
+uncategorized = 0.5
+
+[runtime.hypothesis.tiebreak]
+conflict_min_score = 0.18
+conflict_min_confidence = 0.55
+hold_min_score = 0.28
+hold_min_confidence = 0.60
+min_groups = 2
+
 [runtime.hk_realtime]
 provider = "none"
 
