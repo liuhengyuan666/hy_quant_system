@@ -2,7 +2,35 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import date, datetime
 from pathlib import Path
+
+
+def _parse_signal_date(value: str) -> date:
+    text = str(value).strip()
+    for fmt in ("%Y%m%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(f"invalid --signal-date value: {value}")
+
+
+def _resolve_report_reference(signal_date_text: str | None) -> tuple[date | None, datetime | None]:
+    from core.clock import now_shanghai
+    from core.trading_calendar import is_trading_session, latest_closed_trading_date
+    from config.settings import load_runtime_config
+
+    current = now_shanghai()
+    latest_closed = latest_closed_trading_date(current)
+    if signal_date_text:
+        requested_date = _parse_signal_date(signal_date_text)
+        return min(requested_date, latest_closed), None
+
+    runtime = load_runtime_config()
+    if is_trading_session(current, runtime_config=runtime):
+        return current.date(), current
+    return latest_closed, None
 
 def command_init_db() -> None:
     from data_storage.database import init_database
@@ -136,12 +164,22 @@ def command_run_dashboard(host: str, port: int) -> None:
     uvicorn.run(create_app(), host=host, port=port)
 
 
-def command_run_preclose_analysis(use_intraday_snapshot: bool) -> None:
-    from core.clock import now_shanghai
+def command_run_preclose_analysis(use_intraday_snapshot: bool, signal_date_text: str | None) -> None:
     from scheduler.jobs import run_preclose_analysis_pipeline
 
-    signal_ts = now_shanghai() if use_intraday_snapshot else None
-    result = run_preclose_analysis_pipeline(signal_ts=signal_ts, use_intraday_snapshot=use_intraday_snapshot)
+    if use_intraday_snapshot and signal_date_text is not None:
+        raise ValueError("--signal-date cannot be combined with --use-intraday-snapshot")
+
+    if signal_date_text is not None:
+        signal_date, _ = _resolve_report_reference(signal_date_text)
+        result = run_preclose_analysis_pipeline(signal_ts=None, signal_date=signal_date, use_intraday_snapshot=False)
+    else:
+        signal_date, intraday_ts = _resolve_report_reference(None)
+        result = run_preclose_analysis_pipeline(
+            signal_ts=intraday_ts if use_intraday_snapshot else None,
+            signal_date=signal_date if not use_intraday_snapshot else None,
+            use_intraday_snapshot=use_intraday_snapshot,
+        )
     print(json.dumps(result, ensure_ascii=False))
 
 
@@ -161,24 +199,27 @@ def command_export_signal_summary() -> None:
     )
 
 
-def command_export_strategy_matrix() -> None:
+def command_export_strategy_matrix(signal_date_text: str | None) -> None:
     from scheduler.jobs import export_strategy_matrix_report_pipeline
 
-    result = export_strategy_matrix_report_pipeline()
+    signal_date, intraday_ts = _resolve_report_reference(signal_date_text)
+    result = export_strategy_matrix_report_pipeline(signal_date=signal_date, intraday_ts=intraday_ts)
     print(json.dumps(result, ensure_ascii=False))
 
 
-def command_export_daily_conclusion() -> None:
+def command_export_daily_conclusion(signal_date_text: str | None) -> None:
     from scheduler.jobs import export_daily_conclusion_report_pipeline
 
-    result = export_daily_conclusion_report_pipeline()
+    signal_date, intraday_ts = _resolve_report_reference(signal_date_text)
+    result = export_daily_conclusion_report_pipeline(signal_date=signal_date, intraday_ts=intraday_ts)
     print(json.dumps(result, ensure_ascii=False))
 
 
-def command_export_data_gaps() -> None:
+def command_export_data_gaps(signal_date_text: str | None) -> None:
     from scheduler.jobs import export_data_gap_report_pipeline
 
-    result = export_data_gap_report_pipeline()
+    signal_date, intraday_ts = _resolve_report_reference(signal_date_text)
+    result = export_data_gap_report_pipeline(signal_date=signal_date, intraday_ts=intraday_ts)
     print(json.dumps(result, ensure_ascii=False))
 
 
@@ -250,10 +291,14 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard_parser.add_argument("--port", type=int, default=8000)
     preclose_parser = sub.add_parser("run-preclose-analysis")
     preclose_parser.add_argument("--use-intraday-snapshot", action="store_true")
+    preclose_parser.add_argument("--signal-date", default=None)
     sub.add_parser("export-signal-summary")
-    sub.add_parser("export-daily-conclusion")
-    sub.add_parser("export-data-gaps")
-    sub.add_parser("export-strategy-matrix")
+    daily_conclusion_parser = sub.add_parser("export-daily-conclusion")
+    daily_conclusion_parser.add_argument("--signal-date", default=None)
+    data_gaps_parser = sub.add_parser("export-data-gaps")
+    data_gaps_parser.add_argument("--signal-date", default=None)
+    strategy_matrix_parser = sub.add_parser("export-strategy-matrix")
+    strategy_matrix_parser.add_argument("--signal-date", default=None)
     sub.add_parser("run-scheduler")
 
     backtest_parser = sub.add_parser("backtest")
@@ -296,15 +341,15 @@ def main() -> None:
     elif args.command == "run-dashboard":
         command_run_dashboard(host=args.host, port=args.port)
     elif args.command == "run-preclose-analysis":
-        command_run_preclose_analysis(use_intraday_snapshot=args.use_intraday_snapshot)
+        command_run_preclose_analysis(use_intraday_snapshot=args.use_intraday_snapshot, signal_date_text=args.signal_date)
     elif args.command == "export-signal-summary":
         command_export_signal_summary()
     elif args.command == "export-daily-conclusion":
-        command_export_daily_conclusion()
+        command_export_daily_conclusion(signal_date_text=args.signal_date)
     elif args.command == "export-data-gaps":
-        command_export_data_gaps()
+        command_export_data_gaps(signal_date_text=args.signal_date)
     elif args.command == "export-strategy-matrix":
-        command_export_strategy_matrix()
+        command_export_strategy_matrix(signal_date_text=args.signal_date)
     elif args.command == "run-scheduler":
         from scheduler.run_daily import start_scheduler
 
