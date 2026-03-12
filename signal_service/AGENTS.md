@@ -23,6 +23,8 @@
 - `push_candidates` 是“本轮相对上一轮变化最大的前三个”；改排序逻辑时要一起更新测试。
 - `preclose` / `daily_conclusion` / `data_gaps` / `strategy_matrix` 默认覆盖完整 `universe`；缺失标的用 fallback rows 补齐，不靠“有信号才显示”。
 - `daily_conclusion_report.py` 现在同时支持“最近闭市日版”和“显式 `intraday_ts` 的当天盘中版”；改日期解析时要保护这两种语义。
+- `daily_conclusion` / `strategy_matrix` / `data_gap` 导出当前还支持 CLI 透传 `--signal-date`；默认不带参数时仍可根据当前时间自动选择盘中版或最近闭市日版。
+- `preclose_decision.py` 现在支持历史 `signal_date` 的 post-close 导出，也支持当天 `use_intraday_snapshot`；这两种模式必须保持互斥，不能混成一个模糊入口。
 - 策略分组共识走 `market_hypothesis` 元数据；改注册表分类、分组权重或 tie-break 规则时要同步看 `daily_conclusion`、`strategy_matrix`、dashboard 和文档。
 - 缺少行情时，报告层输出必须显式中性化：例如 `NO_DATA`、`INSUFFICIENT_DATA`、`HOLD_OBSERVE`、`NEUTRAL`，不要泄露旧 summary 残留值。
 - Excel 导出依赖 `xlsxwriter`；缺依赖时抛明确错误，不做静默降级。

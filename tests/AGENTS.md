@@ -21,6 +21,8 @@
 - 涉及 dashboard refresh 时，要同时断言 `summary` 与 `daily_conclusion` 侧效应；否则 `Hypothesis Focus` 这类面板容易空表。
 - 涉及收盘后 quote 逻辑时，要区分 `Daily Close / Preclose Snapshot / Stale Intraday / No Data`，不要只断言“有值”。
 - 涉及 ETF 历史抓取时，要覆盖 `disable_requests_env_proxy()` 这层保护，防止环境代理导致东财接口在测试外 silently fail。
+- 涉及 CLI 日期参数时，要同时断言两件事：带 `--signal-date` 的历史模式、以及无参数时“盘中当天 / 非盘中最近闭市日”的默认语义。
+- `run-preclose-analysis` 新增 `--signal-date` 后，测试必须覆盖它与 `--use-intraday-snapshot` 的互斥关系。
 
 ## COMMANDS
 - 全量：`python -m unittest discover -s tests -p "test_*.py"`

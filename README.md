@@ -164,15 +164,33 @@ python main.py run-preclose-analysis
 python main.py run-preclose-analysis --use-intraday-snapshot
 ```
 
+按指定历史日期导出（仅 post-close 模式）：
+
+```bash
+python main.py run-preclose-analysis --signal-date 20260311
+```
+
 输出包含：
 
 - `csv_path`：`reports/preclose/` 下的收盘前决策明细
 - `json_path`：本轮统计摘要
 
+说明：
+
+- `--signal-date` 支持 `YYYYMMDD` 与 `YYYY-MM-DD`
+- 如果指定日期晚于最近闭市交易日，系统会自动钳到最近闭市日
+- `--signal-date` 不能与 `--use-intraday-snapshot` 同时使用，避免“历史日期 + 当天盘中快照”语义混乱
+
 11.2) 导出整体策略矩阵报告
 
 ```bash
 python main.py export-strategy-matrix
+```
+
+按指定历史日期导出：
+
+```bash
+python main.py export-strategy-matrix --signal-date 20260311
 ```
 
 输出包含：
@@ -191,6 +209,12 @@ python main.py export-strategy-matrix
 
 ```bash
 python main.py export-daily-conclusion
+```
+
+按指定历史日期导出：
+
+```bash
+python main.py export-daily-conclusion --signal-date 20260311
 ```
 
 输出包含：
@@ -212,12 +236,26 @@ python main.py export-daily-conclusion
 python main.py export-data-gaps
 ```
 
+按指定历史日期导出：
+
+```bash
+python main.py export-data-gaps --signal-date 20260311
+```
+
 输出包含：
 
 - `csv_path`：仅保留 `NO_DATA / PARTIAL` 问题标的的 CSV
 - `status_csv_path`：全量标的状态 CSV
 - `json_path`：结构化数据缺口诊断 JSON
 - `xlsx_path`：包含 `Data_Gaps / Universe_Status / Overview` 的 Excel 工作簿
+
+日期语义说明：
+
+- 带 `--signal-date YYYYMMDD`：以该日期为历史参考日
+- 不带参数：默认使用当前实时时间作为参考
+  - 若当前在交易时段：走当天盘中版上下文
+  - 若当前不在交易时段：自动回退到最近闭市交易日
+- 若指定日不是交易日，或当天尚未形成完整 EOD 信号，则内部会自动取 `<= 指定日` 的最近可用交易日信号
 
 12) 启动调度服务（08:30 / 15:30 / 15:35 / 15:40）
 

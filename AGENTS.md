@@ -45,6 +45,8 @@
 - `EOD` 与 `INTRADAY` 继续分表、分入口、分输出；不要把 `datetime` 级数据混入日频表。
 - 收盘前 / 日报 / 策略矩阵 / 数据缺口 报告默认面向完整 `universe`，不是只覆盖当前有信号的标的。
 - CLI 输出保持脚本友好：成功结果打印 JSON 或简洁文本；不要混入大量调试输出。
+- 历史总结类命令（`export-daily-conclusion` / `export-strategy-matrix` / `export-data-gaps`）现在支持 `--signal-date`；不带参数时默认按“当前实时参考，盘中当天 / 非盘中最近闭市日”解析。
+- `run-preclose-analysis` 也支持 `--signal-date` 的 post-close 历史模式，但必须与 `--use-intraday-snapshot` 互斥。
 - 汇总导出约定：`summary/group/top/push` 四类产物同目录生成，文件名前缀稳定。
 - dashboard 默认混合消费 `summary` / `intraday` / `preclose` / `daily_conclusion`；改任一导出文件名或字段时必须同步核对 `web_ui/dashboard_service.py`。
 - `daily_conclusion` 在显式传入 `intraday_ts` 时允许生成“当天盘中版”；不要再把整份日报的目标日期强制回退到最近已闭市日。
@@ -59,6 +61,7 @@
 - 不要在 `main.py` 写复杂业务；复杂逻辑下沉到对应模块。
 - 不要新增自由格式信号值；核心信号继续使用 `BUY/SELL/HOLD`，动作扩展走受控字段。
 - 不要新增返回字段却不更新对应 CLI、README、说明文档和测试。
+- 不要把 `--signal-date` 和“当天盘中 snapshot”语义混用；历史总结与实时 snapshot 必须保持参数层互斥或显式区分。
 - 不要让报告对缺行情标的泄露旧 summary 残留结论；缺数据时明确标注 `NO_DATA` / 中性动作。
 - 不要让 dashboard 把旧盘中快照伪装成今天实时；需要明确 source / updated_at 语义。
 - 不要让非盘中榜单继续沿用 `Preclose Snapshot` 排序；收盘后榜单必须以最近闭市日 `daily close` 为准。
