@@ -75,6 +75,122 @@ class PrecloseDecisionTests(unittest.TestCase):
         self.assertIn("healthy_pullback", result.iloc[0]["decision_reason"])
         self.assertEqual(result.iloc[0]["trend_state"], "UPTREND")
 
+    def test_build_preclose_decisions_filters_intraday_bars_to_signal_date_and_analysis_ts(self):
+        summary = pd.DataFrame(
+            [
+                {
+                    "symbol": "000300",
+                    "display_symbol": "1A0300",
+                    "name": "沪深300",
+                    "asset_type": "INDEX",
+                    "bucket": "宽基指数",
+                    "eod_d": "BUY",
+                    "eod_w": "BUY",
+                    "eod_m": "BUY",
+                    "intraday": "BUY",
+                    "eod_bias": "BUY",
+                    "alignment": "ALIGNED",
+                    "secondary_action": "BUY_CONFIRM",
+                    "secondary_confidence": 90.0,
+                    "review_gate": "CONFIRM",
+                    "review_score": 88.0,
+                    "composite_score": 4.5,
+                    "dashboard_action": "PRIORITY_BUY",
+                    "conviction_rank": 1,
+                }
+            ]
+        )
+        market_data_by_symbol = {
+            "000300": pd.DataFrame(
+                [
+                    {"date": "2026-03-09", "open": 4580.0, "high": 4620.0, "low": 4570.0, "close": 4615.455, "volume": 1000},
+                    {"date": "2026-03-10", "open": 4620.0, "high": 4680.0, "low": 4600.0, "close": 4674.756, "volume": 1000},
+                ]
+            )
+        }
+        intraday_bars = {
+            "000300": pd.DataFrame(
+                [
+                    {"date": datetime(2026, 3, 10, 14, 55), "open": 4688.0, "high": 4690.0, "low": 4685.0, "close": 4689.0},
+                    {"date": datetime(2026, 3, 11, 9, 35), "open": 4690.0, "high": 4693.0, "low": 4688.0, "close": 4692.0},
+                    {"date": datetime(2026, 3, 11, 14, 40), "open": 4700.0, "high": 4703.0, "low": 4698.0, "close": 4701.0},
+                    {"date": datetime(2026, 3, 11, 14, 50), "open": 4704.0, "high": 4708.0, "low": 4702.0, "close": 4706.0},
+                ]
+            )
+        }
+
+        result = build_preclose_decisions(
+            summary=summary,
+            market_data_by_symbol=market_data_by_symbol,
+            intraday_bars_by_symbol=intraday_bars,
+            analysis_mode="INTRADAY_PRE_CLOSE",
+            signal_date=date(2026, 3, 11),
+            analysis_ts=datetime(2026, 3, 11, 14, 45),
+        )
+
+        row = result.iloc[0]
+        self.assertEqual(row["latest_price"], 4701.0)
+        self.assertEqual(row["prev_close"], 4674.756)
+        self.assertEqual(row["session_open"], 4690.0)
+        self.assertEqual(row["session_high"], 4703.0)
+        self.assertEqual(row["session_low"], 4688.0)
+        self.assertAlmostEqual(float(row["day_change_pct"]), (4701.0 / 4674.756) - 1.0)
+
+    def test_build_preclose_decisions_does_not_use_previous_day_intraday_bars_when_today_missing(self):
+        summary = pd.DataFrame(
+            [
+                {
+                    "symbol": "510300",
+                    "display_symbol": "E510300",
+                    "name": "沪深300ETF",
+                    "asset_type": "ETF",
+                    "bucket": "宽基ETF",
+                    "eod_d": "BUY",
+                    "eod_w": "BUY",
+                    "eod_m": "BUY",
+                    "intraday": "BUY",
+                    "eod_bias": "BUY",
+                    "alignment": "ALIGNED",
+                    "secondary_action": "BUY_CONFIRM",
+                    "secondary_confidence": 90.0,
+                    "review_gate": "CONFIRM",
+                    "review_score": 88.0,
+                    "composite_score": 4.5,
+                    "dashboard_action": "PRIORITY_BUY",
+                    "conviction_rank": 1,
+                }
+            ]
+        )
+        market_data_by_symbol = {
+            "510300": pd.DataFrame(
+                [
+                    {"date": "2026-03-09", "open": 4.56, "high": 4.64, "low": 4.55, "close": 4.629, "volume": 1000},
+                    {"date": "2026-03-10", "open": 4.63, "high": 4.69, "low": 4.61, "close": 4.683, "volume": 1000},
+                ]
+            )
+        }
+        intraday_bars = {
+            "510300": pd.DataFrame(
+                [
+                    {"date": datetime(2026, 3, 10, 14, 40), "open": 4.70, "high": 4.71, "low": 4.69, "close": 4.705},
+                    {"date": datetime(2026, 3, 10, 14, 45), "open": 4.705, "high": 4.708, "low": 4.70, "close": 4.707},
+                ]
+            )
+        }
+
+        result = build_preclose_decisions(
+            summary=summary,
+            market_data_by_symbol=market_data_by_symbol,
+            intraday_bars_by_symbol=intraday_bars,
+            analysis_mode="INTRADAY_PRE_CLOSE",
+            signal_date=date(2026, 3, 11),
+            analysis_ts=datetime(2026, 3, 11, 14, 45),
+        )
+
+        row = result.iloc[0]
+        self.assertIsNone(row["latest_price"])
+        self.assertEqual(row["prev_close"], 4.683)
+
     def test_build_preclose_decisions_blocks_sell_when_oversold(self):
         summary = pd.DataFrame(
             [
