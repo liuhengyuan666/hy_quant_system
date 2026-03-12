@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from web_ui.dashboard_service import (
+    _build_market_overview_tables,
     _enrich_latest_intraday,
     _mark_stale_quote,
     _merge_preclose_fallback,
@@ -134,6 +136,24 @@ class DashboardServiceTests(unittest.TestCase):
         self.assertEqual(row["prev_close"], 4647.692)
         self.assertEqual(row["quote_source"], "旧收盘价格 / Stale Daily Close")
 
+    def test_resolve_quote_row_does_not_fall_back_to_daily_close_during_live_session_without_intraday(self):
+        row = _resolve_quote_row(
+            symbol="HSTECH",
+            asset_type="INDEX",
+            meta=None,
+            daily_frame=__import__("pandas").DataFrame([
+                {"date": "2026-03-05", "close": 4796.33},
+                {"date": "2026-03-06", "close": 4947.5},
+            ]),
+            intraday_frame=__import__("pandas").DataFrame(),
+            preclose_by_symbol={},
+            use_live_quotes=True,
+            reference_date=__import__("datetime").date(2026, 3, 11),
+        )
+
+        self.assertIsNone(row["current_level"])
+        self.assertEqual(row["quote_source"], "无数据 / No Data")
+
     def test_enrich_latest_intraday_adds_name_from_symbol_meta(self):
         latest_intraday = __import__("pandas").DataFrame([
             {"symbol": "510300", "strategy": "EMA_cross_strategy", "signal": "BUY", "ts": "2026-03-10T10:16:29+08:00"}
@@ -142,6 +162,58 @@ class DashboardServiceTests(unittest.TestCase):
         enriched = _enrich_latest_intraday(latest_intraday, __import__("pandas").DataFrame())
 
         self.assertEqual(enriched.iloc[0]["name"], "沪深300ETF")
+
+    def test_build_market_overview_tables_fetches_live_quote_bars_when_db_bars_are_stale(self):
+        runtime = type(
+            "Runtime",
+            (),
+            {
+                "intraday_bar_frequency": "5",
+                "intraday_window_am_start": "09:30",
+                "intraday_window_am_end": "11:30",
+                "intraday_window_pm_start": "13:00",
+                "intraday_window_pm_end": "15:00",
+            },
+        )()
+        universe = type("Universe", (), {"index_symbols": ["000001"], "etf_symbols": ["510300"]})()
+
+        @contextmanager
+        def fake_session_scope():
+            yield object()
+
+        stale_intraday = {
+            "000001": __import__("pandas").DataFrame([{"date": "2026-03-09T11:05:00", "close": 4084.567}]),
+            "510300": __import__("pandas").DataFrame([{"date": "2026-03-09T11:05:00", "close": 4.629}]),
+        }
+        fresh_intraday = {
+            "000001": __import__("pandas").DataFrame([{"date": "2026-03-11T14:10:00", "close": 4123.138}]),
+            "510300": __import__("pandas").DataFrame([{"date": "2026-03-11T14:10:00", "close": 4.683}]),
+        }
+
+        with patch("web_ui.dashboard_service.load_runtime_config", return_value=runtime), patch(
+            "web_ui.dashboard_service.load_universe_config", return_value=universe
+        ), patch("web_ui.dashboard_service.load_symbol_meta_map", return_value={}), patch(
+            "web_ui.dashboard_service.now_shanghai",
+            return_value=datetime(2026, 3, 11, 14, 11, tzinfo=ZoneInfo("Asia/Shanghai")),
+        ), patch("web_ui.dashboard_service.is_trading_session", return_value=True), patch(
+            "web_ui.dashboard_service.latest_closed_trading_date", return_value=__import__("datetime").date(2026, 3, 10)
+        ), patch("web_ui.dashboard_service.session_scope", fake_session_scope), patch(
+            "web_ui.dashboard_service.load_market_prices_map",
+            return_value={
+                "000001": __import__("pandas").DataFrame([{"date": "2026-03-10", "close": 4123.138}, {"date": "2026-03-09", "close": 4096.602}]),
+                "510300": __import__("pandas").DataFrame([{"date": "2026-03-10", "close": 4.683}, {"date": "2026-03-09", "close": 4.629}]),
+            },
+        ), patch(
+            "web_ui.dashboard_service.load_realtime_bars_map",
+            side_effect=[stale_intraday, fresh_intraday],
+        ), patch(
+            "web_ui.dashboard_service._fetch_live_quote_bars",
+            return_value=fresh_intraday,
+        ) as mock_fetch_live_quote_bars:
+            result = _build_market_overview_tables(preclose=__import__("pandas").DataFrame())
+
+        mock_fetch_live_quote_bars.assert_called_once()
+        self.assertEqual(result["index_quotes"][0]["current_level"], 4123.138)
 
     def test_build_dashboard_snapshot_reads_latest_reports(self):
         market_overview = {

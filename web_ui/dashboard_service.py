@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -10,6 +11,8 @@ import pandas as pd
 from config.settings import PROJECT_ROOT, SymbolMeta, load_runtime_config, load_symbol_meta_map, load_universe_config
 from core.clock import now_shanghai
 from core.trading_calendar import is_trading_session, latest_closed_trading_date
+from data_service.realtime_etf import fetch_intraday_etf_bars
+from data_service.realtime_index import fetch_intraday_index_bars
 from data_service.sync_market import sync_market_data
 from data_storage.database import session_scope
 from data_storage.realtime_repository import load_realtime_bars_map
@@ -134,6 +137,19 @@ def _quote_reference_date() -> date:
 def _quote_runtime_context(runtime_config: Any, reference: datetime | None = None) -> tuple[bool, date]:
     current = reference or now_shanghai()
     return is_trading_session(current, runtime_config=runtime_config), latest_closed_trading_date(current)
+
+
+def _filter_intraday_for_live_session(intraday_frame: pd.DataFrame, live_date: date) -> pd.DataFrame:
+    if intraday_frame.empty or "date" not in intraday_frame.columns:
+        return pd.DataFrame()
+
+    filtered = intraday_frame.copy()
+    filtered["date"] = pd.to_datetime(filtered["date"], errors="coerce")
+    filtered = _ensure_frame(filtered.dropna(subset=["date"]))
+    if filtered.empty:
+        return pd.DataFrame()
+    filtered = _ensure_frame(filtered[filtered["date"].dt.date == live_date])
+    return filtered.reset_index(drop=True)
 
 
 def _base_quote_row(symbol: str, asset_type: str, meta: SymbolMeta | None) -> dict[str, Any]:
@@ -289,6 +305,42 @@ def _mark_stale_quote(row: dict[str, Any], reference_date: date) -> dict[str, An
     return row
 
 
+def _fetch_live_quote_bars(index_symbols: list[str], etf_symbols: list[str], bar_frequency: str) -> dict[str, pd.DataFrame]:
+    live_bars: dict[str, pd.DataFrame] = {}
+
+    def _load_index(symbol: str) -> tuple[str, pd.DataFrame | None]:
+        try:
+            return symbol, fetch_intraday_index_bars(symbol, period=bar_frequency)
+        except Exception:
+            return symbol, None
+
+    def _load_etf(symbol: str) -> tuple[str, pd.DataFrame | None]:
+        try:
+            return symbol, fetch_intraday_etf_bars(symbol, period=bar_frequency)
+        except Exception:
+            return symbol, None
+
+    jobs: list[tuple[str, str]] = [("index", symbol) for symbol in index_symbols] + [("etf", symbol) for symbol in etf_symbols]
+    if not jobs:
+        return live_bars
+
+    max_workers = min(24, max(1, len(jobs)))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {
+            executor.submit(_load_index if kind == "index" else _load_etf, symbol): (kind, symbol)
+            for kind, symbol in jobs
+        }
+        for future in as_completed(future_map):
+            _, symbol = future_map[future]
+            try:
+                _, frame = future.result()
+            except Exception:
+                continue
+            if frame is not None and not frame.empty:
+                live_bars[symbol] = frame
+    return live_bars
+
+
 def _resolve_quote_row(
     symbol: str,
     asset_type: str,
@@ -298,8 +350,15 @@ def _resolve_quote_row(
     preclose_by_symbol: dict[str, dict[str, Any]],
     use_live_quotes: bool,
     reference_date: date,
+    live_date: date | None = None,
 ) -> dict[str, Any]:
     selected_intraday = intraday_frame if use_live_quotes else pd.DataFrame()
+    if use_live_quotes and live_date is not None:
+        selected_intraday = _filter_intraday_for_live_session(selected_intraday, live_date)
+    if use_live_quotes and selected_intraday.empty:
+        row = _base_quote_row(symbol=symbol, asset_type=asset_type, meta=meta)
+        return _mark_stale_quote(row, reference_date=reference_date)
+
     row = _build_live_quote_row(
         symbol=symbol,
         asset_type=asset_type,
@@ -399,7 +458,9 @@ def _build_market_overview_tables(preclose: pd.DataFrame) -> dict[str, Any]:
     universe = load_universe_config()
     symbol_meta_map = load_symbol_meta_map()
     runtime = load_runtime_config()
-    use_live_quotes, snapshot_today = _quote_runtime_context(runtime)
+    now = now_shanghai()
+    use_live_quotes, snapshot_today = _quote_runtime_context(runtime, reference=now)
+    live_date = now.date()
     all_symbols = list(universe.index_symbols) + list(universe.etf_symbols)
     preclose_rows = _frame_to_records(preclose, limit=max(len(preclose.index), 1_000))
     preclose_by_symbol = {
@@ -418,15 +479,35 @@ def _build_market_overview_tables(preclose: pd.DataFrame) -> dict[str, Any]:
             if latest_market_date is None or latest_market_date < snapshot_today:
                 sync_market_data(index_symbols=universe.index_symbols, etf_symbols=universe.etf_symbols, end_date=snapshot_today.strftime("%Y%m%d"))
 
-        with session_scope() as session:
-            if all_symbols:
-                market_data_by_symbol = load_market_prices_map(session, all_symbols, limit=240, as_of_date=snapshot_today)
-                intraday_bars_by_symbol = load_realtime_bars_map(
-                    session,
-                    symbols=all_symbols,
-                    bar_frequency=runtime.intraday_bar_frequency,
-                    limit=64,
+        def _load_quote_frames() -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
+            with session_scope() as session:
+                if not all_symbols:
+                    return {}, {}
+                return (
+                    load_market_prices_map(session, all_symbols, limit=240, as_of_date=snapshot_today),
+                    load_realtime_bars_map(
+                        session,
+                        symbols=all_symbols,
+                        bar_frequency=runtime.intraday_bar_frequency,
+                        limit=64,
+                    ),
                 )
+
+        market_data_by_symbol, intraday_bars_by_symbol = _load_quote_frames()
+        if use_live_quotes:
+            live_bar_dates = {
+                pd.to_datetime(frame["date"], errors="coerce").dropna().dt.date.max()
+                for frame in intraday_bars_by_symbol.values()
+                if not frame.empty and "date" in frame.columns
+            }
+            if live_date not in live_bar_dates:
+                fresh_live_bars = _fetch_live_quote_bars(
+                    index_symbols=list(universe.index_symbols),
+                    etf_symbols=list(universe.etf_symbols),
+                    bar_frequency=runtime.intraday_bar_frequency,
+                )
+                if fresh_live_bars:
+                    intraday_bars_by_symbol.update(fresh_live_bars)
     except Exception as exc:
         quote_status = "预收盘回退 / Preclose Fallback"
         quote_error = f"{exc.__class__.__name__}: {exc}"
@@ -444,6 +525,7 @@ def _build_market_overview_tables(preclose: pd.DataFrame) -> dict[str, Any]:
                 preclose_by_symbol=preclose_by_symbol,
                 use_live_quotes=use_live_quotes,
                 reference_date=snapshot_today,
+                live_date=live_date,
             )
             rows.append(row)
         return _sort_quote_rows(rows)
