@@ -137,17 +137,17 @@ def run_eod_and_analyze_pipeline(bar_frequencies: tuple[str, ...] = ("D", "W", "
     }
 
 
-def run_preclose_analysis_pipeline(signal_ts=None, use_intraday_snapshot: bool = False) -> dict[str, object]:
-    return run_preclose_analysis(signal_ts=signal_ts, use_intraday_snapshot=use_intraday_snapshot)
+def run_preclose_analysis_pipeline(signal_ts=None, signal_date=None, use_intraday_snapshot: bool = False) -> dict[str, object]:
+    return run_preclose_analysis(signal_ts=signal_ts, signal_date=signal_date, use_intraday_snapshot=use_intraday_snapshot)
 
 
-def export_strategy_matrix_report_pipeline() -> dict[str, object]:
-    return export_strategy_matrix_report()
+def export_strategy_matrix_report_pipeline(signal_date=None, intraday_ts=None) -> dict[str, object]:
+    return export_strategy_matrix_report(signal_date=signal_date, intraday_ts=intraday_ts)
 
 
-def export_daily_conclusion_report_pipeline() -> dict[str, object]:
-    return export_daily_conclusion_report()
+def export_daily_conclusion_report_pipeline(signal_date=None, intraday_ts=None) -> dict[str, object]:
+    return export_daily_conclusion_report(signal_date=signal_date, intraday_ts=intraday_ts)
 
 
-def export_data_gap_report_pipeline() -> dict[str, object]:
-    return export_data_gap_report()
+def export_data_gap_report_pipeline(signal_date=None, intraday_ts=None) -> dict[str, object]:
+    return export_data_gap_report(signal_date=signal_date, intraday_ts=intraday_ts)

@@ -3,12 +3,16 @@ from __future__ import annotations
 import json
 from datetime import date, datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Literal
 
 import pandas as pd
 
 from config.settings import PostgresConfig, load_runtime_config, load_universe_config
+from core.clock import now_shanghai
 from core.trading_calendar import resolve_preclose_signal_date
+from data_service.realtime_etf import fetch_intraday_etf_bars
+from data_service.realtime_index import fetch_intraday_index_bars
 from data_storage.database import session_scope
 from data_storage.realtime_repository import load_intraday_signals, load_realtime_bars_map
 from data_storage.repository import load_latest_signal_date_on_or_before, load_market_prices_map, load_signals_by_date
@@ -149,7 +153,82 @@ def _ensure_preclose_summary_rows(summary: pd.DataFrame, fallback_symbols: list[
     return table.sort_values(["conviction_rank", "symbol"], ascending=[True, True]).reset_index(drop=True)
 
 
-def _latest_bar_metrics(daily_frame: pd.DataFrame, intraday_frame: pd.DataFrame | None = None) -> dict[str, float | None]:
+def _filter_intraday_frame(
+    intraday_frame: pd.DataFrame | None,
+    signal_date: date | None,
+    analysis_ts: datetime | None,
+) -> pd.DataFrame:
+    if intraday_frame is None or intraday_frame.empty:
+        return pd.DataFrame()
+
+    filtered = intraday_frame.copy()
+    if "date" not in filtered.columns and "ts" in filtered.columns:
+        filtered = filtered.rename(columns={"ts": "date"})
+    if "date" not in filtered.columns:
+        return pd.DataFrame()
+    filtered = filtered.sort_values("date")
+    filtered["date"] = pd.to_datetime(filtered["date"], errors="coerce")
+    filtered = filtered.dropna(subset=["date"])
+    if filtered.empty:
+        return pd.DataFrame()
+    if signal_date is not None:
+        filtered = filtered[filtered["date"].dt.date == signal_date]
+    if analysis_ts is not None:
+        cutoff_ts = pd.Timestamp(analysis_ts)
+        if cutoff_ts.tzinfo is not None:
+            cutoff_ts = cutoff_ts.tz_localize(None)
+        filtered = filtered[filtered["date"] <= cutoff_ts]
+    return filtered.reset_index(drop=True)
+
+
+def _resolve_daily_close_metrics(
+    daily_frame: pd.DataFrame,
+    signal_date: date | None,
+    prefer_intraday_snapshot: bool,
+) -> tuple[float | None, float | None, float | None, float | None, pd.DataFrame]:
+    ordered_daily = daily_frame.sort_values("date").copy()
+    ordered_daily["date"] = pd.to_datetime(ordered_daily["date"], errors="coerce")
+    ordered_daily = ordered_daily.dropna(subset=["date"])
+    for column in ["open", "high", "low", "close", "volume"]:
+        if column in ordered_daily.columns:
+            ordered_daily[column] = pd.to_numeric(ordered_daily[column], errors="coerce")
+    ordered_daily = ordered_daily.dropna(subset=["close"])
+    if ordered_daily.empty:
+        return None, None, None, None, ordered_daily
+
+    close = ordered_daily["close"].astype(float)
+    ma20 = _safe_float(close.rolling(20).mean().iloc[-1]) if len(close.index) >= 20 else None
+    ma60 = _safe_float(close.rolling(60).mean().iloc[-1]) if len(close.index) >= 60 else None
+
+    if signal_date is not None:
+        previous_rows = ordered_daily[ordered_daily["date"].dt.date < signal_date]
+        current_day_rows = ordered_daily[ordered_daily["date"].dt.date == signal_date]
+        if prefer_intraday_snapshot:
+            latest_daily_close = (
+                _safe_float(current_day_rows.iloc[-1].get("close"))
+                if not current_day_rows.empty
+                else (_safe_float(previous_rows.iloc[-1].get("close")) if not previous_rows.empty else None)
+            )
+            prev_close = _safe_float(previous_rows.iloc[-1].get("close")) if not previous_rows.empty else None
+            return latest_daily_close, prev_close, ma20, ma60, ordered_daily
+        if not current_day_rows.empty:
+            latest_daily_close = _safe_float(current_day_rows.iloc[-1].get("close"))
+            prev_close = _safe_float(previous_rows.iloc[-1].get("close")) if not previous_rows.empty else None
+            return latest_daily_close, prev_close, ma20, ma60, ordered_daily
+
+    latest_daily_close = _safe_float(close.iloc[-1])
+    prev_close = _safe_float(close.iloc[-2]) if len(close.index) >= 2 else None
+    return latest_daily_close, prev_close, ma20, ma60, ordered_daily
+
+
+def _latest_bar_metrics(
+    daily_frame: pd.DataFrame,
+    intraday_frame: pd.DataFrame | None = None,
+    *,
+    signal_date: date | None = None,
+    analysis_ts: datetime | None = None,
+    analysis_mode: PrecloseMode = "POST_CLOSE",
+) -> dict[str, float | None]:
     if daily_frame.empty:
         return {
             "latest_price": None,
@@ -161,21 +240,17 @@ def _latest_bar_metrics(daily_frame: pd.DataFrame, intraday_frame: pd.DataFrame 
             "ma60": None,
         }
 
-    ordered_daily = daily_frame.sort_values("date").copy()
-    for column in ["open", "high", "low", "close", "volume"]:
-        if column in ordered_daily.columns:
-            ordered_daily[column] = pd.to_numeric(ordered_daily[column], errors="coerce")
+    latest_close, prev_close, ma20, ma60, ordered_daily = _resolve_daily_close_metrics(
+        daily_frame,
+        signal_date=signal_date,
+        prefer_intraday_snapshot=analysis_mode == "INTRADAY_PRE_CLOSE",
+    )
+    ordered_intraday = _filter_intraday_frame(intraday_frame, signal_date=signal_date, analysis_ts=analysis_ts)
 
-    close = ordered_daily["close"].astype(float)
-    latest_close = _safe_float(close.iloc[-1])
-    prev_close = _safe_float(close.iloc[-2]) if len(close.index) >= 2 else None
-    ma20 = _safe_float(close.rolling(20).mean().iloc[-1]) if len(close.index) >= 20 else None
-    ma60 = _safe_float(close.rolling(60).mean().iloc[-1]) if len(close.index) >= 60 else None
-
-    if intraday_frame is None or intraday_frame.empty:
+    if ordered_intraday.empty:
         latest_row = ordered_daily.iloc[-1]
         return {
-            "latest_price": latest_close,
+            "latest_price": None if analysis_mode == "INTRADAY_PRE_CLOSE" and signal_date is not None else latest_close,
             "prev_close": prev_close,
             "session_open": _safe_float(latest_row.get("open")),
             "session_high": _safe_float(latest_row.get("high")),
@@ -183,8 +258,6 @@ def _latest_bar_metrics(daily_frame: pd.DataFrame, intraday_frame: pd.DataFrame 
             "ma20": ma20,
             "ma60": ma60,
         }
-
-    ordered_intraday = intraday_frame.sort_values("date").copy()
     for column in ["open", "high", "low", "close"]:
         if column in ordered_intraday.columns:
             ordered_intraday[column] = pd.to_numeric(ordered_intraday[column], errors="coerce")
@@ -193,7 +266,7 @@ def _latest_bar_metrics(daily_frame: pd.DataFrame, intraday_frame: pd.DataFrame 
     if ordered_intraday.empty:
         latest_row = ordered_daily.iloc[-1]
         return {
-            "latest_price": latest_close,
+            "latest_price": None if analysis_mode == "INTRADAY_PRE_CLOSE" and signal_date is not None else latest_close,
             "prev_close": prev_close,
             "session_open": _safe_float(latest_row.get("open")),
             "session_high": _safe_float(latest_row.get("high")),
@@ -217,6 +290,42 @@ def _pct_delta(current: float | None, reference: float | None) -> float | None:
     if current is None or reference is None or reference == 0:
         return None
     return float((current / reference) - 1.0)
+
+
+def _has_same_day_intraday_bar(frame: pd.DataFrame, signal_date: date) -> bool:
+    if frame.empty or "date" not in frame.columns:
+        return False
+    dates = pd.to_datetime(frame["date"], errors="coerce").dropna()
+    if dates.empty:
+        return False
+    return bool(dates.dt.date.eq(signal_date).any())
+
+
+def _fetch_live_intraday_bars(symbols: list[str], etf_symbols: set[str], bar_frequency: str) -> dict[str, pd.DataFrame]:
+    fetched: dict[str, pd.DataFrame] = {}
+
+    def _load(symbol: str) -> tuple[str, pd.DataFrame | None]:
+        try:
+            if symbol in etf_symbols:
+                return symbol, fetch_intraday_etf_bars(symbol, period=bar_frequency)
+            return symbol, fetch_intraday_index_bars(symbol, period=bar_frequency)
+        except Exception:
+            return symbol, None
+
+    if not symbols:
+        return fetched
+
+    with ThreadPoolExecutor(max_workers=min(16, max(1, len(symbols)))) as executor:
+        future_map = {executor.submit(_load, symbol): symbol for symbol in symbols}
+        for future in as_completed(future_map):
+            symbol = future_map[future]
+            try:
+                _, frame = future.result()
+            except Exception:
+                continue
+            if frame is not None and not frame.empty:
+                fetched[symbol] = frame
+    return fetched
 
 
 def _trend_state(latest_price: float | None, ma20: float | None, ma60: float | None) -> str:
@@ -326,7 +435,13 @@ def build_preclose_decisions(
     for _, base_row in base_summary.iterrows():
         symbol = str(base_row.get("symbol", ""))
         daily_frame = market_data_by_symbol.get(symbol, pd.DataFrame())
-        metrics = _latest_bar_metrics(daily_frame, intraday_map.get(symbol))
+        metrics = _latest_bar_metrics(
+            daily_frame,
+            intraday_map.get(symbol),
+            signal_date=signal_date,
+            analysis_ts=analysis_ts,
+            analysis_mode=analysis_mode,
+        )
         latest_price = metrics["latest_price"]
         prev_close = metrics["prev_close"]
         session_open = metrics["session_open"]
@@ -466,16 +581,20 @@ def export_preclose_decisions(
 
 def run_preclose_analysis(
     signal_ts: datetime | None = None,
+    signal_date: date | None = None,
     intraday_bar_frequency: str | None = None,
     use_intraday_snapshot: bool = False,
     output_dir: str | Path | None = None,
     config: PostgresConfig | None = None,
 ) -> dict[str, object]:
+    if signal_date is not None and use_intraday_snapshot:
+        raise ValueError("signal_date cannot be combined with use_intraday_snapshot")
+
     runtime = load_runtime_config()
     universe = load_universe_config()
     universe_symbols = sorted(set(universe.index_symbols + universe.etf_symbols))
     target_ts = signal_ts
-    target_date = resolve_preclose_signal_date(
+    target_date = signal_date or resolve_preclose_signal_date(
         reference=signal_ts,
         runtime_config=runtime,
         use_intraday_snapshot=use_intraday_snapshot,
@@ -497,6 +616,19 @@ def run_preclose_analysis(
         if use_intraday_snapshot and target_ts is not None and universe_symbols:
             intraday = load_intraday_signals(session, signal_ts=target_ts, bar_frequency=bar_frequency)
             intraday_bars_by_symbol = load_realtime_bars_map(session, symbols=universe_symbols, bar_frequency=bar_frequency, limit=64)
+
+    if use_intraday_snapshot and target_ts is not None and universe_symbols and target_ts.date() == now_shanghai().date():
+        stale_symbols = [
+            symbol for symbol in universe_symbols if not _has_same_day_intraday_bar(intraday_bars_by_symbol.get(symbol, pd.DataFrame()), target_date)
+        ]
+        if stale_symbols:
+            intraday_bars_by_symbol.update(
+                _fetch_live_intraday_bars(
+                    symbols=stale_symbols,
+                    etf_symbols=set(universe.etf_symbols),
+                    bar_frequency=bar_frequency,
+                )
+            )
 
     secondary_validation = build_secondary_validation(eod_d, market_data_by_symbol=market_data_by_symbol, signal_date=target_date)
     summary = build_signal_summary(
